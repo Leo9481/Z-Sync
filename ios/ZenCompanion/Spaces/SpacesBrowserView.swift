@@ -79,9 +79,6 @@ struct SpacesBrowserView: View {
     /// The browser that waits for the content-blocking answer, so its first
     /// page already loads with the reader's choice.
     @State private var browserWaitingForBlocker: BrowserTabSession?
-    /// A plain screen over the sidebar until the launch browser is up, so the
-    /// sidebar never shows for a moment before it.
-    @State private var showsLaunchCurtain = !SpacesBrowserView.openedBrowserThisLaunch
 
     init(
         account: AccountSnapshot?,
@@ -390,11 +387,6 @@ struct SpacesBrowserView: View {
                     .presentationDragIndicator(.visible)
             }
         }
-        .overlay {
-            if showsLaunchCurtain {
-                Color(uiColor: .systemBackground).ignoresSafeArea()
-            }
-        }
         // Asked once, in front of the first browser the reader opens.
         .fullScreenCover(isPresented: $isAskingBlocker, onDismiss: {
             // The cover is fully gone: the browser can take the screen now.
@@ -409,7 +401,6 @@ struct SpacesBrowserView: View {
         }
         .fullScreenCover(item: $browserSession) { session in
             miniBrowser(session, spaces: model.snapshot.spaces)
-                .onAppear { showsLaunchCurtain = false }
                 .onDisappear {
                     // A pin inside the mini-browser fired while it was up.
                     if pendingStaleReload {
@@ -426,10 +417,6 @@ struct SpacesBrowserView: View {
             model.accountChanged(isSignedIn: isSignedIn, isDemo: isDemo)
             openPages.canSave = isSignedIn
         }
-        .onChange(of: browserSession == nil) { _, closed in
-            // Leaving the browser always shows the sidebar.
-            if closed { showsLaunchCurtain = false }
-        }
         .task(id: incomingLink) {
             takeIncomingLink()
         }
@@ -439,18 +426,8 @@ struct SpacesBrowserView: View {
             Self.openedBrowserThisLaunch = true
             // One beat, so the cover is not presented mid-appearance.
             try? await Task.sleep(for: .milliseconds(50))
-            guard browserSession == nil, browserWaitingForBlocker == nil, incomingLink == nil else {
-                showsLaunchCurtain = false
-                return
-            }
-            resumeBrowser(animated: false)
-            // The first launch asks the content-blocking question before the
-            // browser: the sidebar may show behind that question.
-            if browserWaitingForBlocker != nil { showsLaunchCurtain = false }
-            // The browser is up well before this. Lift the curtain even if
-            // its appearance was never reported, so it can never stay.
-            try? await Task.sleep(for: .milliseconds(600))
-            showsLaunchCurtain = false
+            guard browserSession == nil, browserWaitingForBlocker == nil, incomingLink == nil else { return }
+            resumeBrowser()
         }
         .task {
             // Show release notes once per app version, after the first frame
@@ -634,10 +611,10 @@ struct SpacesBrowserView: View {
 
     /// Brings the browser back as it was left: its page used last, or a new
     /// blank page when none is open.
-    private func resumeBrowser(animated: Bool = true) {
+    private func resumeBrowser() {
         prepareOpenPages()
         openPages.resumeOrOpenBlank()
-        show(BrowserTabSession(space: model.activeSpace), animated: animated)
+        show(BrowserTabSession(space: model.activeSpace))
     }
 
     private func openNewTab(in space: ZenSpace) {
@@ -663,15 +640,9 @@ struct SpacesBrowserView: View {
 
     /// The first browser waits for the content-blocking question; every
     /// later one opens at once.
-    private func show(_ session: BrowserTabSession, animated: Bool = true) {
+    private func show(_ session: BrowserTabSession) {
         if ContentBlocker.shared.asked {
-            presentCover {
-                // At launch the browser is the app's main screen: it should
-                // just be there, not slide up over the sidebar.
-                var transaction = Transaction()
-                transaction.disablesAnimations = !animated
-                withTransaction(transaction) { browserSession = session }
-            }
+            presentCover { browserSession = session }
         } else {
             browserWaitingForBlocker = session
             presentCover { isAskingBlocker = true }
