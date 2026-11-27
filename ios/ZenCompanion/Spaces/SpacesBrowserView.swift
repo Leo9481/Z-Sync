@@ -1,4 +1,3 @@
-import StoreKit
 import SwiftUI
 
 /// The browser being open. The pages themselves live in `OpenPagesStore`; this
@@ -42,7 +41,6 @@ struct SpacesBrowserView: View {
 
     @Environment(\.colorScheme) private var scheme
     @Environment(\.scenePhase) private var scenePhase
-    @Environment(\.requestReview) private var requestReview
     @State private var model: BrowserModel
 
     private enum ActiveSheet: Identifiable, Equatable {
@@ -492,11 +490,6 @@ struct SpacesBrowserView: View {
                 openNewTab(in: model.activeSpace)
             }
             model.consumeSearchOnOpen()
-        }
-        .onChange(of: model.reviewPromptPending) { _, pending in
-            guard pending else { return }
-            requestReview()
-            model.consumeReviewPrompt()
         }
     }
 
