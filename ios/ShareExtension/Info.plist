@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Z-Sync</string>
+	<string>Z-Browser</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -13,7 +13,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Z-Sync</string>
+	<string>Z-Browser</string>
 	<key>CFBundlePackageType</key>
 	<string>XPC!</string>
 	<key>CFBundleShortVersionString</key>
@@ -43,6 +43,6 @@
 		<string>$(PRODUCT_MODULE_NAME).ShareViewController</string>
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Z-Sync loads the icon of a synced tab from the tab's own address, which may be a device on your local network.</string>
+	<string>Z-Browser loads the icon of a synced tab from the tab's own address, which may be a device on your local network.</string>
 </dict>
 </plist>

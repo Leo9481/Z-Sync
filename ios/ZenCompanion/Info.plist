@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>Z-Sync</string>
+	<string>Z-Browser</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -13,7 +13,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Z-Sync</string>
+	<string>Z-Browser</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -58,7 +58,7 @@
 	<key>NSCameraUsageDescription</key>
 	<string>Websites you allow in the browser can use your camera.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Z-Sync loads the icon of a synced tab from the tab's own address, which may be a device on your local network.</string>
+	<string>Z-Browser loads the icon of a synced tab from the tab's own address, which may be a device on your local network.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Websites you allow in the browser can use your location.</string>
 	<key>NSMicrophoneUsageDescription</key>

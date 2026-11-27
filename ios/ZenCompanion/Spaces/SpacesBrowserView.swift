@@ -1,4 +1,3 @@
-import StoreKit
 import SwiftUI
 
 /// The browser being open. The pages themselves live in `OpenPagesStore`; this
@@ -31,10 +30,17 @@ struct SpacesBrowserView: View {
     var onPresentSignInHelp: () -> Void = {}
     /// The hidden demo unlock behind the card's app mark and title.
     var onDemoTap: () -> Void = {}
+    /// Something sits over this screen (the first-run onboarding), so the
+    /// browser must not come up over it yet.
+    var isCovered = false
+
+    /// The browser is the app's main screen: it comes up once per launch, over
+    /// this screen, which stays underneath as the sidebar. Static so a rebuild
+    /// of this screen (sign-in, sign-out) does not bring it up again.
+    @MainActor private static var openedBrowserThisLaunch = false
 
     @Environment(\.colorScheme) private var scheme
     @Environment(\.scenePhase) private var scenePhase
-    @Environment(\.requestReview) private var requestReview
     @State private var model: BrowserModel
 
     private enum ActiveSheet: Identifiable, Equatable {
@@ -81,7 +87,8 @@ struct SpacesBrowserView: View {
         onConsumeIncomingLink: @escaping () -> Void = {},
         onPresentSignIn: @escaping () -> Void = {},
         onPresentSignInHelp: @escaping () -> Void = {},
-        onDemoTap: @escaping () -> Void = {}
+        onDemoTap: @escaping () -> Void = {},
+        isCovered: Bool = false
     ) {
         self.account = account
         self.sessionNotice = sessionNotice
@@ -90,6 +97,7 @@ struct SpacesBrowserView: View {
         self.onPresentSignIn = onPresentSignIn
         self.onPresentSignInHelp = onPresentSignInHelp
         self.onDemoTap = onDemoTap
+        self.isCovered = isCovered
         _model = State(initialValue: BrowserModel(account: account))
         _whatsNew = State(initialValue: WhatsNewStore())
     }
@@ -412,6 +420,15 @@ struct SpacesBrowserView: View {
         .task(id: incomingLink) {
             takeIncomingLink()
         }
+        .task(id: isCovered) {
+            // Launch straight into the browser, once the onboarding is gone.
+            guard !isCovered, !Self.openedBrowserThisLaunch else { return }
+            Self.openedBrowserThisLaunch = true
+            // One beat, so the cover is not presented mid-appearance.
+            try? await Task.sleep(for: .milliseconds(50))
+            guard browserSession == nil, browserWaitingForBlocker == nil, incomingLink == nil else { return }
+            resumeBrowser()
+        }
         .task {
             // Show release notes once per app version, after the first frame
             // has had a moment to settle, and only to readers who used an
@@ -458,11 +475,6 @@ struct SpacesBrowserView: View {
                 openNewTab(in: model.activeSpace)
             }
             model.consumeSearchOnOpen()
-        }
-        .onChange(of: model.reviewPromptPending) { _, pending in
-            guard pending else { return }
-            requestReview()
-            model.consumeReviewPrompt()
         }
     }
 
@@ -593,7 +605,16 @@ struct SpacesBrowserView: View {
             ExternalBrowser.open(url)
             return
         }
-        presentBrowser(url: url, title: tab.displayTitle, space: space, openedFromSpace: true)
+        // A local copy that stays as a normal mobile tab, like any other.
+        presentBrowser(url: url, title: tab.displayTitle, space: space)
+    }
+
+    /// Brings the browser back as it was left: its page used last, or a new
+    /// blank page when none is open.
+    private func resumeBrowser() {
+        prepareOpenPages()
+        openPages.resumeOrOpenBlank()
+        show(BrowserTabSession(space: model.activeSpace))
     }
 
     private func openNewTab(in space: ZenSpace) {

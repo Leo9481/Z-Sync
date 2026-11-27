@@ -335,10 +335,12 @@ struct MiniBrowserChrome<NavBar: View>: View {
         .floatingGlassCapsule()
     }
 
-    /// Smaller than the side buttons, as the middle control of the row.
+    /// Smaller than the side buttons, as the middle control of the row. Shows
+    /// the synced sidebar: the browser is the app's main screen, so there is
+    /// nothing to close.
     private var closeButton: some View {
         Button(action: onClose) {
-            Image(systemName: "xmark")
+            Image(systemName: "sidebar.left")
                 .font(.system(size: overviewShown ? 17 : 16, weight: .semibold))
                 .foregroundStyle(ink)
                 .frame(width: overviewShown ? 100 : 92, height: overviewShown ? 46 : 42)
@@ -348,7 +350,7 @@ struct MiniBrowserChrome<NavBar: View>: View {
                 .floatingGlassCapsule()
         }
         .buttonStyle(GlassPressStyle())
-        .accessibilityLabel(Text("browser.close"))
+        .accessibilityLabel(Text(verbatim: "Sidebar"))
     }
 
     // MARK: - Expanded menu

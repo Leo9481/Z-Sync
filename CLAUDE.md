@@ -30,22 +30,29 @@ The current Z-Sync sidebar screen stays as a **1:1 real-time mirror of the deskt
 ### 1. Browser shell
 - `WKWebView`-based browser with a minimal Safari-style UI.
 - Floating buttons in a **frosted-glass** style built on SwiftUI blur materials with a custom tint and border. Do not depend on Apple's native Liquid Glass API, so the look stays stable across iOS versions.
-- Two extra quick buttons beyond Safari's: **fullscreen** (hides the bars) and **quick bookmark** (tap saves to a default Raindrop collection, long-press chooses a collection).
+- Two extra quick buttons beyond Safari's: **fullscreen** (hides the bars) and **quick bookmark** (tap saves to a default Raindrop collection, long-press chooses a collection). The quick-bookmark icon is Raindrop's cloud logo.
+- The browser is the app's root screen. Bottom bar is one row, laid out like Safari's (decided with Leo, 2026-11-27):
+  `[‹ ›]  [☰  ⤢  domain  ☁  ↻]  [⧉]`. Left: a back/forward capsule, with forward only shown when there is a page to go forward to. Center: the address pill holding the page menu, fullscreen, the domain, Raindrop quick bookmark and reload/stop, with tighter side padding than Safari so the domain keeps room. Right: the tabs button.
+- No close (✕) button, no second row, no gradient or scrim behind the bar. No microphone or voice search (Leo uses the keyboard's dictation).
 
 ### 2. Tab manager (Safari-style)
 - A tab grid like Safari's, using `LazyVGrid` and thumbnails from `WKWebView.takeSnapshot`.
-- Bottom bar with a **"Private | Tabs"** pill, a `+` button, and a done button.
+- Bottom bar with a **"Private | Tabs"** pill, a `+` button, and a done button. It also holds the **sidebar** button (the only way into the sidebar) and a **Raindrop bookmarks** button that opens all Raindrop collections and bookmarks.
 - Each card has a close button at the top right and a **"send to desktop" button at the bottom left**, with a short confirmation (checkmark) after sending.
-- Leo often has around 30 tabs open, so keep only a few live web views in memory. The rest become snapshots and reload on demand. Persist tab state (for example `interactionState`) so tabs survive app restarts.
+- Memory: use the efficient, standard approach. Keep a few live web views (`OpenPagesStore.liveLimit`), and let the rest sleep with their snapshot and history and wake on demand. Persist tabs so they survive restarts. Tabs do not expire by default.
 - Mobile tabs are **separate from desktop tabs**. Nothing syncs automatically from mobile to desktop.
 
 ### 3. Sidebar view
 - A separate button opens the existing sidebar screen above.
 - Tapping a tab or pinned tab there opens a **local copy** as a mobile tab. This replaces the current quick browser.
 
-### 4. Send to desktop
-- Sends the tab's link so it appears as a **regular open tab in the Default Workspace** in desktop Zen, in the same list as the other open tabs. No space picker, since Leo uses only the Default Workspace.
-- Z-Sync already has a "share a link into a space" feature **(verify)**. Reuse it if it can add a normal tab to the default space, and tell Leo if it cannot.
+### 4. Send to desktop (Send Tab to Device)
+- Decided 2026-11-27: implement Firefox's **Send Tab to Device** over Firefox Account device commands, not by writing a tab into the spaces collection. A spaces write only shows up after desktop Zen re-syncs (often a restart). Send Tab arrives within seconds, in the active workspace.
+- Register the app as an FxA device with the send-tab command so it also shows in desktop Zen's "Send to device" list. Receiving on the phone is checked when the app opens (no Mozilla push credentials).
+- Verify the protocol against Mozilla's docs and the Firefox iOS / application-services source before coding. Keep it separate from the spaces sync code.
+- **Share sheet redesign (decided with Leo, 2026-11-27):** sharing a link from any app shows two choices instead of the pin-into-a-space screen: **Open in Z-Browser** (opens it as a regular new tab) and **Send to device** (lists the devices on the Firefox account). The pin/workspace picker goes away.
+  - "Open in Z-Browser" needs the share extension to launch the main app. Apple has no official API for this, so it walks the responder chain to `UIApplication.open(_:options:completionHandler:)` with the `zsync://open?url=` link. It may break in a future iOS. If it fails, fall back to saving the link in the App Group for the app to open next time it comes to the front.
+  - "Open in Z-Browser" can ship before Send Tab. The device list arrives with milestone 5.
 
 ### 5. Ad blocking
 Leo's benchmark is sketchy streaming sites full of popups, popunders, fake play buttons and banners. YouTube is not a priority.
@@ -63,16 +70,32 @@ Known ceiling: WebKit does not let apps cancel arbitrary network requests, so th
 - Collections map to folders. Provide a bookmarks view, the quick-save button, and add/remove support.
 - Leo will create the Raindrop developer app and provide the keys. Never commit secrets. Use CI secrets and local config.
 
+### 7. Page translator and dark mode (must-haves, added 2026-11-27)
+Both live in the page menu (the ☰ button in the address pill).
+- **Translate page:** use Apple's on-device Translation framework (private, free, no API key). Collect the page's text nodes with an injected script, translate them in batches with `TranslationSession`, and write them back in place. Offer "Show original" to undo. The framework's programmatic API needs iOS 18, so on iOS 17 hide the item. **(Verify the current API before coding.)**
+- **Dark mode for websites:** one global toggle in the menu, applied to every page. Use Dark Reader's dynamic theme engine (MIT license), injected as a `WKUserScript`, so pages that are already dark stay as they are. Allow turning it off for one site. **(Verify the license and the current release.)**
+
+### 8. Browser-only VPN (Proton WireGuard), added 2026-11-27
+- Goal: a toggle that sends only the browser's traffic through Leo's Proton VPN. The rest of the phone is untouched. iCloud Private Relay can't be used (no API for third-party browsers), and Proton offers no SOCKS/HTTP proxies, so this is the route.
+- How: run a userspace WireGuard client inside the app (for example wireguard-go with a userspace network stack, exposing a local SOCKS5 proxy, like wireproxy). Point WebKit at it with `WKWebsiteDataStore.proxyConfigurations` (iOS 17+). This is the same pattern Onion Browser uses for Tor. Build the library in CI, like adblock-rust. **(Verify current libraries, licenses and the proxyConfigurations behaviour before coding.)**
+- Leo imports a WireGuard config file downloaded from his Proton account. The file holds a private key: store it in the Keychain only, never in the repo, logs or CI.
+- Scope of the toggle: start with a global on/off in the page menu or settings. Consider "always on for private tabs" later. Runs only while the app is open. It uses one of Proton's device connections.
+- While the toggle is on and a check or fallback is still running, fail closed: pages wait or show an error instead of loading directly.
+- **Server check (Leo, 2026-11-27):** each config is tied to one Proton server. WireGuard has no "is the server up" ping, so the check is: bring up the tunnel, wait for a handshake, then load a small test URL through it, with a short timeout. Run it when the toggle is switched on, when the app returns to the front, and when page loads start failing through the tunnel.
+- **Fallback cascade:** Leo can import a few configs in a priority order he sets. If the check fails on config 1, try config 2, then 3, and so on. Show which server is in use. **If every config fails (Leo, 2026-11-27):** show a popup that says no VPN server answered, and turn the feature off automatically, so browsing goes on over the normal connection. Leo turns it back on himself. Periodically retry the preferred config so it switches back once that server is up again.
+
 ## Suggested order of work
 
 1. Get the fork building: unsigned-IPA workflow in GitHub Actions, and confirm it installs on Leo's phone.
 2. Browser shell: `WKWebView`, address and search bar, minimal UI, and opening sidebar tabs locally.
-3. Tab manager: grid, thumbnails, persistence, "Private | Tabs" pill.
-4. Send to desktop.
-5. Popup and redirect blocking.
-6. Raindrop.io integration and quick-bookmark button.
-7. Filter lists, then cosmetic filters and scriptlets, then auto-updates.
-8. Frosted-glass polish and fullscreen button, tuned on the real phone.
+3. Page menu tools: translator and dark mode for websites.
+4. Tab manager: grid, thumbnails, persistence, "Private | Tabs" pill.
+5. Send to desktop.
+6. Popup and redirect blocking.
+7. Raindrop.io integration and quick-bookmark button.
+8. Filter lists, then cosmetic filters and scriptlets, then auto-updates.
+9. Browser-only VPN through Proton WireGuard.
+10. Frosted-glass polish and fullscreen button, tuned on the real phone.
 
 ## Open questions to answer by reading the code first
 

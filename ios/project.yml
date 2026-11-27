@@ -34,8 +34,8 @@ targets:
     info:
       path: ZenCompanion/Info.plist
       properties:
-        CFBundleDisplayName: Z-Sync
-        CFBundleName: Z-Sync
+        CFBundleDisplayName: Z-Browser
+        CFBundleName: Z-Browser
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         # The app's own link form, zsync://open?url=<address>, works without
@@ -60,7 +60,7 @@ targets:
           # Google result clicks 302 from https://www.google.com/goto to cleartext
           # http hosts. WKWebView drops that hop unless web content is exempt.
           NSAllowsArbitraryLoadsInWebContent: true
-        NSLocalNetworkUsageDescription: Z-Sync loads the icon of a synced tab from the tab's own address, which may be a device on your local network.
+        NSLocalNetworkUsageDescription: Z-Browser loads the icon of a synced tab from the tab's own address, which may be a device on your local network.
         # Asked only after a website in the browser wants them and the reader allows it.
         NSCameraUsageDescription: Websites you allow in the browser can use your camera.
         NSMicrophoneUsageDescription: Websites you allow in the browser can use your microphone.
@@ -112,15 +112,15 @@ targets:
     info:
       path: ShareExtension/Info.plist
       properties:
-        CFBundleDisplayName: Z-Sync
-        CFBundleName: Z-Sync
+        CFBundleDisplayName: Z-Browser
+        CFBundleName: Z-Browser
         CFBundlePackageType: XPC!
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         ITSAppUsesNonExemptEncryption: false
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
-        NSLocalNetworkUsageDescription: Z-Sync loads the icon of a synced tab from the tab's own address, which may be a device on your local network.
+        NSLocalNetworkUsageDescription: Z-Browser loads the icon of a synced tab from the tab's own address, which may be a device on your local network.
         NSExtension:
           NSExtensionPointIdentifier: com.apple.share-services
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
