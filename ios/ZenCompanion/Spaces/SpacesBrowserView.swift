@@ -426,6 +426,10 @@ struct SpacesBrowserView: View {
             model.accountChanged(isSignedIn: isSignedIn, isDemo: isDemo)
             openPages.canSave = isSignedIn
         }
+        .onChange(of: browserSession == nil) { _, closed in
+            // Leaving the browser always shows the sidebar.
+            if closed { showsLaunchCurtain = false }
+        }
         .task(id: incomingLink) {
             takeIncomingLink()
         }
@@ -443,6 +447,10 @@ struct SpacesBrowserView: View {
             // The first launch asks the content-blocking question before the
             // browser: the sidebar may show behind that question.
             if browserWaitingForBlocker != nil { showsLaunchCurtain = false }
+            // The browser is up well before this. Lift the curtain even if
+            // its appearance was never reported, so it can never stay.
+            try? await Task.sleep(for: .milliseconds(600))
+            showsLaunchCurtain = false
         }
         .task {
             // Show release notes once per app version, after the first frame
