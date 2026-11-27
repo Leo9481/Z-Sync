@@ -279,10 +279,12 @@ final class OpenPagesStore: MiniBrowserPageHost {
     /// The order the deck and the address bar share. It holds still while the
     /// user is switching, so swiping back lands on the page just left and a
     /// page swiped to does not jump to the front of the deck yet.
+    ///
+    /// Safari's order: the tabs as they were opened (a link's tab right after
+    /// its opener), the same in the grid and in the swipe, so nothing reorders
+    /// while the reader switches.
     var deckOrder: [OpenPage] {
-        guard let switchingOrder else { return recencyOrder }
-        return switchingOrder.compactMap(page(_:))
-            + pages.filter { !switchingOrder.contains($0.id) }
+        pages
     }
 
     /// The pages either side of the active one, for the address bar swipe:

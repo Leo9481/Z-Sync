@@ -38,176 +38,101 @@ enum DisplayCorners {
     }
 }
 
-/// Where the iPhone's app switcher puts its cards, as one pure calculation, so
-/// the page can land exactly on its card without measuring anything.
+/// Where Safari-style grid cards sit, as one pure calculation, so the page can
+/// land exactly on its card (and grow back out of it) without measuring
+/// anything. The browser and the overview both use it with the same scroll.
 ///
 /// A card is the page alone, without the status bar's strip above it, in the
-/// page's own proportions. The focused card sits right of
-/// the middle; each card further right lies on top and runs away quickly,
-/// each card further left tucks in behind with less and less showing.
-struct PageDeckGeometry {
+/// page's own proportions, with its title under it.
+struct PageGridGeometry {
     let screen: CGSize
-    /// How many cards the deck holds. A card on its way out already counts as
-    /// gone, so the cards sliding into its place do not move a second time
-    /// when it is removed.
-    let count: CGFloat
+    let count: Int
     /// The status bar's height: the page starts below it, and so does a card
     /// grown back to the page.
     var topInset: CGFloat = 0
+    /// The overview's buttons at the bottom; the last row scrolls clear of them.
+    var bottomClearance: CGFloat = 0
+
+    static let sideInset: CGFloat = 16
+    static let gutter: CGFloat = 14
+    /// Room under each card for its icon and title.
+    static let titleHeight: CGFloat = 28
+    static let rowGap: CGFloat = 12
+    static let topGap: CGFloat = 14
+
+    /// A card's corners: the display's curve, scaled with the card.
+    @MainActor static var cornerRadius: CGFloat { max(14, DisplayCorners.radius * 0.42) }
+    /// A tapped card growing back into its page.
+    static let openMotion = Animation.spring(duration: 0.4, bounce: 0)
+
+    /// Two columns on a phone, three on a wide window.
+    var columns: Int { screen.width >= 700 ? 3 : 2 }
 
     /// The part of the screen the page fills.
     var pageHeight: CGFloat { max(0, screen.height - topInset) }
 
-    /// Gentler than the display's own curve scaled down with the card: a
-    /// page's header sits right in the top corners and would be cut off.
-    @MainActor static var cornerRadius: CGFloat { max(14, DisplayCorners.radius * focusScale * cornerShare) }
-    private static let cornerShare: CGFloat = 0.8
-    /// A tapped card growing back into its page, and the deck parting around it.
-    static let openMotion = Animation.spring(duration: 0.4, bounce: 0)
-
-    private static let focusScale: CGFloat = 0.6875
-    private static let scaleStep: CGFloat = 0.0105
-    /// The focused card's left edge, as a share of the width.
-    private static let restingLeft: CGFloat = 0.29
-    /// Left edges grow as `spread * (growth^offset - 1)` from there. Two curves
-    /// that meet without a kink: one tucks the cards behind, one throws them off.
-    private static let behindSpread: CGFloat = 0.369
-    private static let behindGrowth: CGFloat = 2.39
-    private static let aheadSpread: CGFloat = 0.3876
-    private static let aheadGrowth: CGFloat = 2.29
-    /// A card's middle, as a share of the height. A little below the
-    /// screen's own: a card is the page alone, shorter than the screen.
-    private static let middle: CGFloat = 0.52
-
     var cardSize: CGSize {
-        CGSize(width: screen.width * Self.focusScale, height: pageHeight * Self.focusScale)
+        let columns = CGFloat(columns)
+        let width = max(1, (screen.width - Self.sideInset * 2 - Self.gutter * (columns - 1)) / columns)
+        return CGSize(width: width, height: width * pageHeight / max(screen.width, 1))
     }
 
-    func frame(index: CGFloat, focus: CGFloat) -> CGRect {
-        let offset = index - focus
-        let scale = Self.focusScale + Self.scaleStep * min(2, max(-4, offset))
-        let size = CGSize(width: screen.width * scale, height: pageHeight * scale)
-        let left = screen.width * Self.left(at: min(3, offset))
+    var rowHeight: CGFloat { cardSize.height + Self.titleHeight + Self.rowGap }
+    private var contentTop: CGFloat { topInset + Self.topGap }
+    private var rows: Int { (count + columns - 1) / columns }
+    var contentHeight: CGFloat { contentTop + CGFloat(rows) * rowHeight + bottomClearance }
+    var maxScroll: CGFloat { max(0, contentHeight - screen.height) }
+
+    /// The card's frame on screen, with the grid scrolled by `scroll`.
+    func frame(index: Int, scroll: CGFloat) -> CGRect {
+        let row = index / columns
+        let column = index % columns
+        let size = cardSize
         return CGRect(
-            x: left + endShift(focus: focus),
-            y: screen.height * Self.middle - size.height / 2,
+            x: Self.sideInset + CGFloat(column) * (size.width + Self.gutter),
+            y: contentTop + CGFloat(row) * rowHeight - scroll,
             width: size.width,
             height: size.height
         )
     }
 
-    /// With nothing on top of it the last card moves to the true middle.
-    private func endShift(focus: CGFloat) -> CGFloat {
-        let last = max(0, count - 1)
-        let near = min(1, max(0, 1 - (last - focus)))
-        let eased = near * near * (3 - 2 * near)
-        let centered = (screen.width - cardSize.width) / 2
-        return (centered - screen.width * Self.restingLeft) * eased
+    /// The card grown to the whole page: below the status bar, edge to edge.
+    var pageFrame: CGRect {
+        CGRect(x: 0, y: topInset, width: screen.width, height: pageHeight)
     }
 
-    private static func left(at offset: CGFloat) -> CGFloat {
-        offset < 0
-            ? restingLeft + behindSpread * (pow(behindGrowth, offset) - 1)
-            : restingLeft + aheadSpread * (pow(aheadGrowth, offset) - 1)
-    }
-}
-
-/// One card's place in the deck. The focus is interpolated here, frame by
-/// frame, so a card follows the deck's curve while it settles instead of
-/// cutting straight across to where it ends.
-private struct DeckCardPlacement: ViewModifier, Animatable {
-    let deck: PageDeckGeometry
-    var index: CGFloat
-    var focus: CGFloat
-    var reveal: CGFloat
-    var lift: CGFloat
-    /// 1 is this card grown to the whole screen.
-    var expansion: CGFloat
-    /// The cards the deck holds. Fractional while one leaves, and animated
-    /// with the rest, so the deck's end moves along the same curve.
-    var count: CGFloat
-
-    var animatableData: AnimatablePair<AnimatablePair<CGFloat, CGFloat>, AnimatablePair<CGFloat, AnimatablePair<CGFloat, AnimatablePair<CGFloat, CGFloat>>>> {
-        get { AnimatablePair(AnimatablePair(index, focus), AnimatablePair(reveal, AnimatablePair(lift, AnimatablePair(expansion, count)))) }
-        set {
-            index = newValue.first.first
-            focus = newValue.first.second
-            reveal = newValue.second.first
-            lift = newValue.second.second.first
-            expansion = newValue.second.second.second.first
-            count = newValue.second.second.second.second
-        }
+    /// The scroll that puts this card's row in the middle of the space between
+    /// the status bar and the buttons, as far as the grid allows.
+    func scroll(showing index: Int) -> CGFloat {
+        guard count > 0 else { return 0 }
+        let card = frame(index: min(max(0, index), count - 1), scroll: 0)
+        let visibleMiddle = (topInset + (screen.height - bottomClearance)) / 2
+        return clamped(card.midY - visibleMiddle)
     }
 
-    func body(content: Content) -> some View {
-        let deck = PageDeckGeometry(screen: self.deck.screen, count: count, topInset: self.deck.topInset)
-        let resting = deck.frame(index: index, focus: focus)
-        // Grown all the way, the card is the page: below the status bar.
-        let frame = CGRect(
-            x: resting.minX * (1 - expansion),
-            y: resting.minY + (deck.topInset - resting.minY) * expansion,
-            width: resting.width + (deck.screen.width - resting.width) * expansion,
-            height: resting.height + (deck.pageHeight - resting.height) * expansion
-        )
-        let offset = index - focus
-        // The neighbours come in from the sides as the page shrinks.
-        let aside = abs(offset) < 0.01 || expansion > 0
-            ? 0
-            : (offset < 0 ? -1 : 1) * deck.screen.width * 0.75 * (1 - reveal)
-        return content
-            .scaleEffect(frame.width / max(deck.cardSize.width, 1))
-            .position(x: frame.midX + aside, y: frame.midY + lift)
+    func clamped(_ scroll: CGFloat) -> CGFloat {
+        min(maxScroll, max(0, scroll))
+    }
+
+    /// Past either end the grid follows the finger at a third of its pace.
+    func rubberBanded(_ scroll: CGFloat) -> CGFloat {
+        if scroll < 0 { return scroll / 3 }
+        if scroll > maxScroll { return maxScroll + (scroll - maxScroll) / 3 }
+        return scroll
+    }
+
+    /// Whether a card is on screen, or a row away from it.
+    func isNear(index: Int, scroll: CGFloat) -> Bool {
+        let card = frame(index: index, scroll: scroll)
+        return card.maxY > -rowHeight && card.minY < screen.height + rowHeight
     }
 }
 
-/// Cards the deck is not resting on sit a little in the dark, the ones behind
-/// more than the one lying on top, so the focused card stands out. On a dark
-/// background the shadows hardly show, so the dimming does more of the work.
-private struct DeckCardDim: ViewModifier, Animatable {
-    var offset: CGFloat
-    let isDark: Bool
-
-    var animatableData: CGFloat {
-        get { offset }
-        set { offset = newValue }
-    }
-
-    func body(content: Content) -> some View {
-        let dim = isDark
-            ? (offset < 0 ? min(0.45, -offset * 0.3) : min(0.26, offset * 0.22))
-            : (offset < 0 ? min(0.3, -offset * 0.2) : min(0.16, offset * 0.14))
-        return content.opacity(Double(dim))
-    }
-}
-
-/// Fades a card's icon and name with its place in the deck.
-private struct DeckHeaderFade: ViewModifier, Animatable {
-    var offset: CGFloat
-    var reveal: CGFloat
-    /// Only the focused card has room for its name.
-    let isName: Bool
-
-    var animatableData: AnimatablePair<CGFloat, CGFloat> {
-        get { AnimatablePair(offset, reveal) }
-        set {
-            offset = newValue.first
-            reveal = newValue.second
-        }
-    }
-
-    func body(content: Content) -> some View {
-        let place = isName
-            ? 1 - min(1, abs(offset) * 2.5)
-            : 1 - min(1, max(0, -offset - 1.5) * 2)
-        return content.opacity(Double(place * reveal))
-    }
-}
-
-/// Every open page as a card, the way the iPhone shows its running apps. The
-/// deck slides sideways under the finger and comes to rest on a card. A card
-/// opens with a tap and closes when it is pulled up; long press has the rest.
-/// It sits between the page and the browser's dock, which stays on screen and
-/// changes its controls, so the two never stack.
+/// Every open page of the section on screen as a card, in a grid like
+/// Safari's. The grid scrolls under the finger; a card opens with a tap,
+/// closes with its × or a swipe sideways, and long press has the rest. It
+/// sits between the page and the browser's buttons, which stay on screen and
+/// change their controls, so the two never stack.
 struct OpenPagesOverview: View {
     let pages: OpenPagesStore
     let spaces: [ZenSpace]
@@ -218,81 +143,36 @@ struct OpenPagesOverview: View {
     /// The card growing back into its page, and how far it has got.
     var expandingCardID: String?
     var expansion: CGFloat
-    /// A page that is not part of the deck yet.
+    /// A page that is not part of the grid yet.
     var excludedCardID: String?
-    /// 0 with only the page on screen, 1 with the deck fully there.
+    /// 0 with only the page on screen, 1 with the grid fully there.
     var reveal: CGFloat
-    /// Cards that lie on top of the page's own card wait until it has landed:
-    /// the page flies above the deck and could not pass under them.
-    var aheadReveal: CGFloat
     /// Status bar height: the page, and so each card, starts below it.
     var topInset: CGFloat
-    /// Height of the browser's dock, which stays over the overview.
+    /// Height of the browser's buttons, which stay over the overview.
     var bottomClearance: CGFloat
+    /// How far the grid is scrolled. Kept by the browser, so the page lands on
+    /// the card where the grid really shows it.
+    @Binding var scroll: CGFloat
     var onOpen: (OpenPage) -> Void
 
     @Environment(\.colorScheme) private var scheme
     @State private var pinError: String?
-    /// The card in focus; between two whole numbers while the deck moves.
-    @State private var focus: CGFloat
-    /// Page ids, least recently used first, fixed when the deck comes up: like
-    /// the running apps, the deck reorders only the next time it opens, never
-    /// under the finger or under a card that was just tapped.
-    @State private var order: [String]
-    @State private var dragStartFocus: CGFloat?
+    @State private var dragStartScroll: CGFloat?
     @State private var dragAxis: DragAxis?
-    /// The card being pulled up, and how far.
-    @State private var liftedID: String?
-    @State private var lift: CGFloat = 0
-    /// How far the other cards have closed the gap the lifted one will leave.
-    @State private var gap: CGFloat = 0
+    /// The card being swiped sideways to close it, and how far.
+    @State private var swipedID: String?
+    @State private var swipe: CGFloat = 0
 
-    private enum DragAxis { case sideways, up, ignored }
-
-    init(
-        pages: OpenPagesStore,
-        spaces: [ZenSpace],
-        saveKind: SaveKind,
-        hiddenCardID: String?,
-        expandingCardID: String?,
-        expansion: CGFloat,
-        excludedCardID: String?,
-        reveal: CGFloat,
-        aheadReveal: CGFloat,
-        topInset: CGFloat,
-        bottomClearance: CGFloat,
-        onOpen: @escaping (OpenPage) -> Void
-    ) {
-        self.pages = pages
-        self.spaces = spaces
-        self.saveKind = saveKind
-        self.hiddenCardID = hiddenCardID
-        self.expandingCardID = expandingCardID
-        self.expansion = expansion
-        self.excludedCardID = excludedCardID
-        self.reveal = reveal
-        self.aheadReveal = aheadReveal
-        self.topInset = topInset
-        self.bottomClearance = bottomClearance
-        self.onOpen = onOpen
-        let ordered = pages.deckOrder.filter { $0.id != excludedCardID }
-        _order = State(initialValue: ordered.map(\.id))
-        // Right after a swipe the page on screen need not be the front card.
-        let start = pages.activeID.flatMap { id in ordered.firstIndex { $0.id == id } }
-            ?? max(0, ordered.count - 1)
-        _focus = State(initialValue: CGFloat(start))
-    }
+    private enum DragAxis { case vertical, sideways, ignored }
 
     private var visiblePages: [OpenPage] {
-        let open = pages.pages.filter { $0.id != excludedCardID }
-        let known = order.compactMap { id in open.first { $0.id == id } }
-        // A popup can arrive while the deck is up; it is the newest.
-        return known + open.filter { !order.contains($0.id) }
+        pages.pages.filter { $0.id != excludedCardID }
     }
 
     var body: some View {
         GeometryReader { proxy in
-            let deck = PageDeckGeometry(screen: proxy.size, count: CGFloat(visiblePages.count), topInset: topInset)
+            let grid = geometry(for: proxy.size)
             ZStack {
                 backdrop
                     .ignoresSafeArea()
@@ -302,29 +182,25 @@ struct OpenPagesOverview: View {
                         .padding(.bottom, bottomClearance)
                         .opacity(Double(reveal))
                 } else {
-                    cards(deck)
+                    cards(grid)
                 }
             }
-            .simultaneousGesture(deckGesture(deck))
+            .simultaneousGesture(gridGesture(grid))
+            .onChange(of: pages.pages.map(\.id)) { _, _ in
+                // A page can go without passing through `close`: a popup
+                // that closes itself, a page that expires. The grid must not
+                // stay scrolled past its new end.
+                let clamped = grid.clamped(scroll)
+                if clamped != scroll {
+                    withAnimation(.spring(duration: 0.34, bounce: 0)) { scroll = clamped }
+                }
+            }
         }
         // The cards are laid out from the reader's origin, so the finger is
-        // read from there too. In global space it would be off by the side
-        // strip on iPhone Duo.
-        .coordinateSpace(.named(Self.deckSpace))
-        // Top to bottom like the page, but not into a safe area at the side:
-        // iPhone Duo keeps its status bar and camera in a strip there, and the
-        // page ends before it. Measured over the full width, every card would
-        // be a little wider than its page, and the page would jump sideways
-        // and resize as it turns into its card.
+        // read from there too.
+        .coordinateSpace(.named(Self.gridSpace))
+        // Top to bottom like the page; see the page's own frame.
         .ignoresSafeArea(edges: .vertical)
-        .onChange(of: pages.pages.map(\.id)) { _, _ in
-            // A page can go without passing through `close`: a popup that
-            // closes itself, a page that expires. The deck must rest on a
-            // card that still exists: the cards it shows, which leave out the
-            // one the page on screen stands in for.
-            let last = CGFloat(max(0, visiblePages.count - 1))
-            if focus > last { focus = last }
-        }
         .alert(
             Text("browser.pin_failed"),
             isPresented: Binding(get: { pinError != nil }, set: { if !$0 { pinError = nil } })
@@ -335,76 +211,79 @@ struct OpenPagesOverview: View {
         }
     }
 
-    // MARK: - Deck
+    private func geometry(for size: CGSize) -> PageGridGeometry {
+        PageGridGeometry(
+            screen: size,
+            count: visiblePages.count,
+            topInset: topInset,
+            bottomClearance: bottomClearance
+        )
+    }
 
-    private func cards(_ deck: PageDeckGeometry) -> some View {
+    // MARK: - Grid
+
+    private func cards(_ grid: PageGridGeometry) -> some View {
         ZStack {
             let cards = visiblePages
-            let lifted = liftedID.flatMap { id in cards.firstIndex { $0.id == id } }
-            let closedFocus = lifted.map { focusAfterClosing($0, count: cards.count) } ?? focus
             ForEach(Array(cards.enumerated()), id: \.element.id) { index, page in
-                // Where the lifted card is going to leave a hole, the others
-                // are already on their way into it. The card itself stays.
-                let closing = lifted != nil && index != lifted
-                let place = closing && index > lifted! ? CGFloat(index) - gap : CGFloat(index)
-                let deckFocus = closing ? focus + (closedFocus - focus) * gap : focus
-                OpenPageCard(
-                    page: page,
-                    store: pages,
-                    isCurrent: page.id == pages.activeID,
-                    hidesPicture: page.id == hiddenCardID,
-                    isFrontCard: index == cards.count - 1,
-                    size: deck.cardSize,
-                    offset: place - deckFocus,
-                    reveal: reveal,
-                    isExpanding: page.id == expandingCardID,
-                    expansion: page.id == expandingCardID ? expansion : 0,
-                    onOpen: {
-                        // The deck parts around the card in the same move:
-                        // the cards on top of it run off, it never jumps in
-                        // front of them.
-                        withAnimation(PageDeckGeometry.openMotion) { focus = CGFloat(index) }
-                        onOpen(page)
-                    },
-                    onClose: { close(page) }
-                ) {
-                    menu(for: page)
+                let isExpanding = page.id == expandingCardID
+                // Only what is on screen, or a row away, is drawn at all: with
+                // dozens of tabs the grid still draws a handful of cards.
+                if isExpanding || grid.isNear(index: index, scroll: scroll) {
+                    let grown = isExpanding ? expansion : 0
+                    let resting = grid.frame(index: index, scroll: scroll)
+                    let target = grid.pageFrame
+                    let frame = CGRect(
+                        x: resting.minX + (target.minX - resting.minX) * grown,
+                        y: resting.minY + (target.minY - resting.minY) * grown,
+                        width: resting.width + (target.width - resting.width) * grown,
+                        height: resting.height + (target.height - resting.height) * grown
+                    )
+                    let isCurrent = page.id == pages.activeID
+                    // The others come in around the page as it shrinks.
+                    let settling = isCurrent || isExpanding ? 1 : 0.92 + 0.08 * reveal
+                    OpenPageCard(
+                        page: page,
+                        store: pages,
+                        isCurrent: isCurrent && expandingCardID == nil,
+                        hidesPicture: page.id == hiddenCardID,
+                        size: grid.cardSize,
+                        isNear: grid.isNear(index: index, scroll: scroll),
+                        isExpanding: isExpanding,
+                        expansion: grown,
+                        onOpen: { onOpen(page) },
+                        onClose: { close(page) }
+                    ) {
+                        menu(for: page)
+                    }
+                    .scaleEffect(frame.width / max(grid.cardSize.width, 1) * settling)
+                    .position(
+                        x: frame.midX + (page.id == swipedID ? swipe : 0),
+                        y: frame.midY
+                    )
+                    .opacity(isCurrent || isExpanding ? 1 : Double(reveal))
+                    .opacity(page.id == swipedID ? Double(1 - min(0.7, abs(swipe) / max(grid.cardSize.width * 1.6, 1))) : 1)
+                    .zIndex(isExpanding ? 1_000 : Double(index))
                 }
-                .modifier(DeckCardPlacement(
-                    deck: deck,
-                    index: place,
-                    focus: deckFocus,
-                    reveal: place > deckFocus ? min(reveal, aheadReveal) : reveal,
-                    lift: page.id == liftedID ? lift : 0,
-                    expansion: page.id == expandingCardID ? expansion : 0,
-                    // A lifted card already counts as gone for the deck's end, so
-                    // the others settle once instead of moving again when it goes.
-                    count: max(1, deck.count - gap)
-                ))
-                // Further right is further on top, as with the running apps.
-                .zIndex(Double(index))
             }
         }
         .allowsHitTesting(reveal > 0.99)
     }
 
-    private static let deckSpace = "OpenPagesOverview.deck"
+    private static let gridSpace = "OpenPagesOverview.grid"
 
-    /// One finger, one decision: sideways moves the deck, up lifts the card
-    /// under the finger. Both follow the finger exactly and hand its speed on.
-    private func deckGesture(_ deck: PageDeckGeometry) -> some Gesture {
-        DragGesture(minimumDistance: 8, coordinateSpace: .named(Self.deckSpace))
+    /// One finger, one decision: up and down scrolls the grid, sideways on a
+    /// card swipes it away. Both follow the finger and hand its speed on.
+    private func gridGesture(_ grid: PageGridGeometry) -> some Gesture {
+        DragGesture(minimumDistance: 8, coordinateSpace: .named(Self.gridSpace))
             .onChanged { value in
-                if dragAxis == nil { chooseAxis(for: value, in: deck) }
+                if dragAxis == nil { chooseAxis(for: value, in: grid) }
                 switch dragAxis {
+                case .vertical:
+                    let start = dragStartScroll ?? scroll
+                    scroll = grid.rubberBanded(start - value.translation.height)
                 case .sideways:
-                    let start = dragStartFocus ?? focus
-                    focus = rubberBanded(start - value.translation.width / span(deck))
-                case .up:
-                    let height = value.translation.height
-                    // Up is one to one. Down gives a little and comes back.
-                    lift = height < 0 ? height : 70 * (1 - exp(-height / 140))
-                    gap = min(0.4, max(0, -lift) / max(deck.cardSize.height * 0.75, 1))
+                    swipe = value.translation.width
                 default:
                     break
                 }
@@ -412,96 +291,66 @@ struct OpenPagesOverview: View {
             .onEnded { value in
                 let axis = dragAxis
                 dragAxis = nil
-                dragStartFocus = nil
+                dragStartScroll = nil
                 switch axis {
-                case .sideways: settle(velocity: value.velocity.width, in: deck)
-                case .up: releaseLift(value, in: deck)
+                case .vertical: settle(value, in: grid)
+                case .sideways: releaseSwipe(value, in: grid)
                 default: break
                 }
             }
     }
 
-    /// How far the finger travels to move the deck by one card.
-    private func span(_ deck: PageDeckGeometry) -> CGFloat {
-        max(deck.screen.width * 0.5, 1)
-    }
-
-    private func chooseAxis(for value: DragGesture.Value, in deck: PageDeckGeometry) {
+    private func chooseAxis(for value: DragGesture.Value, in grid: PageGridGeometry) {
         let width = abs(value.translation.width)
         let height = abs(value.translation.height)
-        if width > height {
+        if height >= width {
+            dragAxis = .vertical
+            dragStartScroll = scroll
+        } else if let id = cardID(at: value.startLocation, in: grid) {
             dragAxis = .sideways
-            dragStartFocus = focus
-        } else if let id = cardID(at: value.startLocation, in: deck) {
-            dragAxis = .up
-            liftedID = id
-            lift = 0
+            swipedID = id
+            swipe = 0
         } else {
             dragAxis = .ignored
         }
     }
 
-    /// The topmost card under the finger.
-    private func cardID(at point: CGPoint, in deck: PageDeckGeometry) -> String? {
+    /// The card under the finger.
+    private func cardID(at point: CGPoint, in grid: PageGridGeometry) -> String? {
         let cards = visiblePages
-        for index in cards.indices.reversed()
-        where deck.frame(index: CGFloat(index), focus: focus).contains(point) {
-            return cards[index].id
-        }
-        return nil
+        return cards.indices.first { grid.frame(index: $0, scroll: scroll).contains(point) }.map { cards[$0].id }
     }
 
-    private func rubberBanded(_ position: CGFloat) -> CGFloat {
-        let last = CGFloat(max(0, visiblePages.count - 1))
-        if position < 0 { return position * 0.3 }
-        if position > last { return last + (position - last) * 0.3 }
-        return position
-    }
-
-    /// The deck coasts on at the finger's speed and comes to rest on a card.
-    private func settle(velocity: CGFloat, in deck: PageDeckGeometry) {
-        let last = CGFloat(max(0, visiblePages.count - 1))
-        let cardsPerSecond = -velocity / span(deck)
-        let coasted = focus + cardsPerSecond * 0.18
-        let reach = max(focus.rounded() - 4, min(focus.rounded() + 4, coasted.rounded()))
-        let target = min(last, max(0, reach))
-        let distance = target - focus
-        let speed = distance == 0 ? 0 : min(12, max(-12, cardsPerSecond / distance))
-        withAnimation(.interpolatingSpring(duration: 0.42, bounce: 0, initialVelocity: speed)) {
-            focus = target
+    /// The grid coasts on at the finger's speed and comes to rest within its
+    /// ends, springing back if it was pulled past one.
+    private func settle(_ value: DragGesture.Value, in grid: PageGridGeometry) {
+        let thrown = scroll - (value.predictedEndTranslation.height - value.translation.height)
+        let target = grid.clamped(thrown)
+        let distance = target - scroll
+        let speed = distance == 0 ? 0 : min(12, max(-12, -value.velocity.height / distance))
+        withAnimation(.interpolatingSpring(duration: 0.55, bounce: 0, initialVelocity: speed)) {
+            scroll = target
         }
     }
 
-    /// Thrown or pulled far enough the card leaves over the top; otherwise it
-    /// drops back into the deck.
-    private func releaseLift(_ value: DragGesture.Value, in deck: PageDeckGeometry) {
-        guard let id = liftedID, let page = visiblePages.first(where: { $0.id == id }) else {
-            liftedID = nil
-            lift = 0
+    /// Thrown or pulled far enough the card leaves off the side and closes;
+    /// otherwise it comes back.
+    private func releaseSwipe(_ value: DragGesture.Value, in grid: PageGridGeometry) {
+        guard let id = swipedID, let page = visiblePages.first(where: { $0.id == id }) else {
+            swipedID = nil
+            swipe = 0
             return
         }
-        let thrown = value.velocity.height < -700
-        guard lift < 0, thrown || lift < -deck.cardSize.height * 0.22 else {
-            let speed = lift == 0 ? 0 : min(12, max(-12, -value.velocity.height / lift))
-            withAnimation(.interpolatingSpring(duration: 0.46, bounce: 0.32, initialVelocity: speed)) {
-                lift = 0
-                gap = 0
-            } completion: {
-                if lift == 0 { liftedID = nil }
+        let thrown = abs(value.velocity.width) > 700 && (value.velocity.width < 0) == (swipe < 0)
+        guard swipe != 0, thrown || abs(swipe) > grid.cardSize.width * 0.5 else {
+            withAnimation(.spring(duration: 0.34, bounce: 0.2)) { swipe = 0 } completion: {
+                if swipe == 0 { swipedID = nil }
             }
             return
         }
         AppServices.haptics.selectionChanged()
-        let destination = -deck.screen.height
-        let distance = destination - lift
-        let speed = distance == 0 ? 0 : min(8, max(0, value.velocity.height / distance))
-        withAnimation(
-            .interpolatingSpring(duration: 0.3, bounce: 0, initialVelocity: speed),
-            completionCriteria: .logicallyComplete
-        ) {
-            lift = destination
-            gap = 1
-        } completion: {
+        let destination = (swipe < 0 ? -1 : 1) * grid.screen.width
+        withAnimation(.easeOut(duration: 0.2)) { swipe = destination } completion: {
             close(page)
         }
     }
@@ -511,7 +360,7 @@ struct OpenPagesOverview: View {
     /// The app's own background, the one the overview always had. While a
     /// card grows into its page the page stays hidden behind it: only the
     /// status bar's strip, which is no part of a card, lets the page's own
-    /// show through as the deck goes.
+    /// show through as the grid goes.
     private var backdrop: some View {
         VStack(spacing: 0) {
             Palette.background(scheme)
@@ -562,7 +411,7 @@ struct OpenPagesOverview: View {
         }
 
         if let url = page.url {
-            if !spaces.isEmpty {
+            if !spaces.isEmpty, !page.model.isPrivate {
                 Menu {
                     ForEach(spaces) { space in
                         let folders = saveKind == .pinned ? PinDestinationModel.folderEntries(in: space) : []
@@ -623,27 +472,15 @@ struct OpenPagesOverview: View {
 
     // MARK: - Actions
 
-    /// The cards close the gap: the next one slides in from the right, the
-    /// last one hands the focus to the card before it.
+    /// The cards after it move up into the gap.
     private func close(_ page: OpenPage) {
-        let cards = visiblePages
-        guard let index = cards.firstIndex(where: { $0.id == page.id }) else { return }
-        let target = focusAfterClosing(index, count: cards.count)
         withAnimation(.spring(duration: 0.34, bounce: 0)) {
             _ = pages.close(page.id)
-            focus = target
-            if liftedID == page.id {
-                liftedID = nil
-                lift = 0
-                gap = 0
+            if swipedID == page.id {
+                swipedID = nil
+                swipe = 0
             }
         }
-    }
-
-    private func focusAfterClosing(_ index: Int, count: Int) -> CGFloat {
-        var target = focus.rounded()
-        if CGFloat(index) < target { target -= 1 }
-        return min(CGFloat(max(0, count - 2)), max(0, target))
     }
 
     /// Once the page belongs to a space it leaves the list; a failed write
@@ -669,28 +506,21 @@ struct OpenPagesOverview: View {
     }
 }
 
-/// Cards this far from the deck's focus hold their picture; the others let go
-/// of it once the disk can give it back. A card ahead is off screen past about
-/// 1.4 cards (`PageDeckGeometry.frame`); cards behind tuck in with a sliver of
-/// at least a few points up to about 5 cards back. One card of margin on top.
-private let pictureCardsAhead: CGFloat = 3
-private let pictureCardsBehind: CGFloat = 6
-/// `focus` jumps to where an animation ends, so a card can still be crossing
-/// the screen after it left the window: it lets go only once the deck's
-/// longest move (0.42 s) is over.
+/// `focus` jumps to where an animation ends, so a card can still be on screen
+/// after it left the window: it lets go of its picture only after a moment.
 private let pictureDropDelay: Duration = .milliseconds(600)
 
-/// One page: the whole screen in small, its icon and name above it.
+/// One page: the page in small, with a close button on it, a send button for
+/// later, and its icon and title under it.
 private struct OpenPageCard<Menu: View>: View {
     let page: OpenPage
     let store: OpenPagesStore
+    /// The page the overview was opened from: outlined, like Safari's.
     let isCurrent: Bool
     let hidesPicture: Bool
-    /// Nothing lies on top of this card, so its name has the whole width.
-    let isFrontCard: Bool
     let size: CGSize
-    let offset: CGFloat
-    let reveal: CGFloat
+    /// On screen or a row away: it holds its picture.
+    let isNear: Bool
     /// Growing to the whole screen: it casts nothing that could show through
     /// when it fades into the live page.
     let isExpanding: Bool
@@ -702,48 +532,26 @@ private struct OpenPageCard<Menu: View>: View {
 
     @Environment(\.colorScheme) private var scheme
 
-    private let iconSide: CGFloat = 22
-    private let headerInset: CGFloat = 20
-    private let iconGap: CGFloat = 8
+    private var radius: CGFloat { PageGridGeometry.cornerRadius }
     private var shape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: PageDeckGeometry.cornerRadius, style: .continuous)
+        RoundedRectangle(cornerRadius: radius, style: .continuous)
     }
 
-    /// Near enough the deck's focus to hold its picture.
-    private var isNear: Bool {
-        offset > -pictureCardsBehind && offset < pictureCardsAhead
-    }
-
-    /// Up to the icon of the card lying on top.
-    private var nameWidth: CGFloat {
-        let room = isFrontCard ? size.width - headerInset * 2 : size.width * 0.727 - 12
-        return max(0, room - iconSide - iconGap)
-    }
-
-    /// A private page keeps its site to itself: one name for all of them.
-    private var cardTitle: String {
-        page.model.isPrivate ? String(localized: "kept.private_tab") : page.title
-    }
+    /// The controls on the card fade as it grows into its page.
+    private var controlsOpacity: Double { Double(max(0, 1 - expansion * 3)) }
 
     var body: some View {
-        Group {
-            if page.model.isPrivate {
-                PrivatePageCover()
-            } else {
-                OpenPageShot(page: page, store: store)
-            }
-        }
+        OpenPageShot(page: page, store: store)
             .frame(width: size.width, height: size.height)
+            .clipShape(CardOutline(radius: radius, expansion: expansion))
             .overlay {
-                Color.black
-                    .modifier(DeckCardDim(offset: offset, isDark: scheme == .dark))
-                    .allowsHitTesting(false)
-            }
-            .clipShape(CardOutline(radius: PageDeckGeometry.cornerRadius, expansion: expansion))
-            // Dark: the shadow is lost on the background, so a faint light rim
-            // draws each card's edge over the one below.
-            .overlay {
-                if scheme == .dark && !isExpanding {
+                if isCurrent {
+                    shape
+                        .strokeBorder(Palette.ink(scheme).opacity(0.85), lineWidth: 2.5)
+                        .allowsHitTesting(false)
+                } else if scheme == .dark && !isExpanding {
+                    // Dark: the shadow is lost on the background, so a faint
+                    // light rim draws the card's edge.
                     shape
                         .strokeBorder(Color.white.opacity(0.14), lineWidth: 0.75)
                         .allowsHitTesting(false)
@@ -752,18 +560,27 @@ private struct OpenPageCard<Menu: View>: View {
             // One picture, so the page's color under it never shows through
             // while the card fades.
             .compositingGroup()
-            // Light: every card in the pile adds its own to the one below.
-            .shadow(color: .black.opacity(isExpanding ? 0 : 0.26), radius: 14, x: -3, y: 0)
+            .shadow(color: .black.opacity(isExpanding ? 0 : 0.18), radius: 8, y: 3)
             .opacity(hidesPicture ? 0 : 1)
-            .overlay(alignment: .topLeading) {
-                header.offset(x: headerInset, y: -(iconSide + 8))
-            }
             .contentShape(shape)
             .contentShape(.contextMenuPreview, shape)
             .onTapGesture(perform: onOpen)
             .contextMenu { menu() }
+            .overlay(alignment: .topTrailing) {
+                closeButton
+                    .opacity(hidesPicture ? 0 : controlsOpacity)
+            }
+            .overlay(alignment: .bottomLeading) {
+                sendButton
+                    .opacity(hidesPicture ? 0 : controlsOpacity)
+            }
+            .overlay(alignment: .bottom) {
+                title
+                    .offset(y: PageGridGeometry.titleHeight)
+                    .opacity(hidesPicture ? 0 : controlsOpacity)
+            }
             .accessibilityElement(children: .contain)
-            .accessibilityLabel(isCurrent ? Text(verbatim: "\(cardTitle), \(String(localized: "kept.current_page"))") : Text(verbatim: cardTitle))
+            .accessibilityLabel(isCurrent ? Text(verbatim: "\(page.title), \(String(localized: "kept.current_page"))") : Text(verbatim: page.title))
             .accessibilityAddTraits(.isButton)
             .accessibilityAction(.default, onOpen)
             .accessibilityAction(named: Text("kept.close_page")) { onClose() }
@@ -772,7 +589,7 @@ private struct OpenPageCard<Menu: View>: View {
                 if isNear {
                     await store.loadShot(of: page)
                 } else {
-                    // Cancelled when the card comes back before the deck has settled.
+                    // Cancelled when the card comes back before the grid settles.
                     try? await Task.sleep(for: pictureDropDelay)
                     guard !Task.isCancelled else { return }
                     store.dropShot(of: page)
@@ -780,40 +597,55 @@ private struct OpenPageCard<Menu: View>: View {
             }
     }
 
-    private var header: some View {
-        HStack(spacing: iconGap) {
+    private var closeButton: some View {
+        Button(action: onClose) {
+            Image(systemName: "xmark")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 24, height: 24)
+                .background(Color.black.opacity(0.55), in: Circle())
+                // A bigger target than the circle it draws.
+                .frame(width: 40, height: 40)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(2)
+        .accessibilityLabel(Text("kept.close_page"))
+    }
+
+    /// Send to desktop: wired up with the Send Tab milestone.
+    private var sendButton: some View {
+        Image(systemName: "laptopcomputer.and.arrow.down")
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(.white.opacity(0.6))
+            .frame(width: 26, height: 24)
+            .background(Color.black.opacity(0.35), in: Capsule())
+            .padding(8)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+
+    private var title: some View {
+        HStack(spacing: 6) {
             icon
-                .modifier(DeckHeaderFade(offset: offset, reveal: reveal, isName: false))
-            Text(cardTitle)
-                .font(.system(size: 14, weight: .semibold))
+            Text(page.title)
+                .font(.system(size: 12.5, weight: .semibold))
                 .foregroundStyle(Color.primary)
                 .lineLimit(1)
-                .frame(maxWidth: nameWidth, alignment: .leading)
-                .modifier(DeckHeaderFade(offset: offset, reveal: reveal, isName: true))
         }
+        .frame(maxWidth: size.width - 8, alignment: .center)
+        .frame(height: PageGridGeometry.titleHeight)
         .allowsHitTesting(false)
     }
 
     @ViewBuilder
     private var icon: some View {
-        if page.model.isPrivate {
-            Image("incognito")
-                .resizable()
-                .scaledToFit()
-                .foregroundStyle(Color.primary)
-                .frame(width: iconSide, height: iconSide)
-        } else if let url = page.url {
-            Favicon(urlString: url.absoluteString, size: iconSide)
-                .shadow(color: .black.opacity(0.28), radius: 4, y: 2)
+        if let url = page.url {
+            Favicon(urlString: url.absoluteString, size: 15)
         } else {
-            RoundedRectangle(cornerRadius: 5.5, style: .continuous)
-                .fill(Color.secondary.opacity(0.25))
-                .frame(width: iconSide, height: iconSide)
-                .overlay {
-                    Image(systemName: "globe")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Color.secondary)
-                }
+            Image(systemName: "globe")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.secondary)
         }
     }
 }
