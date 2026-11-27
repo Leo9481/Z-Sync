@@ -49,7 +49,10 @@ The current Z-Sync sidebar screen stays as a **1:1 real-time mirror of the deskt
 ### 4. Send to desktop (Send Tab to Device)
 - Decided 2026-11-27: implement Firefox's **Send Tab to Device** over Firefox Account device commands, not by writing a tab into the spaces collection. A spaces write only shows up after desktop Zen re-syncs (often a restart). Send Tab arrives within seconds, in the active workspace.
 - Register the app as an FxA device with the send-tab command so it also shows in desktop Zen's "Send to device" list. Receiving on the phone is checked when the app opens (no Mozilla push credentials).
-- Verify the protocol against Mozilla's docs and the Firefox iOS / application-services source before coding. Keep it separate from the spaces sync code. The existing Share-sheet "save into a space" feature stays.
+- Verify the protocol against Mozilla's docs and the Firefox iOS / application-services source before coding. Keep it separate from the spaces sync code.
+- **Share sheet redesign (decided with Leo, 2026-11-27):** sharing a link from any app shows two choices instead of the pin-into-a-space screen: **Open in Z-Browser** (opens it as a regular new tab) and **Send to device** (lists the devices on the Firefox account). The pin/workspace picker goes away.
+  - "Open in Z-Browser" needs the share extension to launch the main app. Apple has no official API for this, so it walks the responder chain to `UIApplication.open(_:options:completionHandler:)` with the `zsync://open?url=` link. It may break in a future iOS. If it fails, fall back to saving the link in the App Group for the app to open next time it comes to the front.
+  - "Open in Z-Browser" can ship before Send Tab. The device list arrives with milestone 5.
 
 ### 5. Ad blocking
 Leo's benchmark is sketchy streaming sites full of popups, popunders, fake play buttons and banners. YouTube is not a priority.
