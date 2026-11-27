@@ -80,9 +80,9 @@ Both live in the page menu (the ☰ button in the address pill).
 - How: run a userspace WireGuard client inside the app (for example wireguard-go with a userspace network stack, exposing a local SOCKS5 proxy, like wireproxy). Point WebKit at it with `WKWebsiteDataStore.proxyConfigurations` (iOS 17+). This is the same pattern Onion Browser uses for Tor. Build the library in CI, like adblock-rust. **(Verify current libraries, licenses and the proxyConfigurations behaviour before coding.)**
 - Leo imports a WireGuard config file downloaded from his Proton account. The file holds a private key: store it in the Keychain only, never in the repo, logs or CI.
 - Scope of the toggle: start with a global on/off in the page menu or settings. Consider "always on for private tabs" later. Runs only while the app is open. It uses one of Proton's device connections.
-- If the tunnel is down while the toggle is on, fail closed: show an error instead of loading pages directly.
+- While the toggle is on and a check or fallback is still running, fail closed: pages wait or show an error instead of loading directly.
 - **Server check (Leo, 2026-11-27):** each config is tied to one Proton server. WireGuard has no "is the server up" ping, so the check is: bring up the tunnel, wait for a handshake, then load a small test URL through it, with a short timeout. Run it when the toggle is switched on, when the app returns to the front, and when page loads start failing through the tunnel.
-- **Fallback cascade:** Leo can import a few configs in a priority order he sets. If the check fails on config 1, try config 2, then 3, and so on. Show which server is in use. If all fail, stay fail-closed and say so. Periodically retry the preferred config so it switches back once that server is up again.
+- **Fallback cascade:** Leo can import a few configs in a priority order he sets. If the check fails on config 1, try config 2, then 3, and so on. Show which server is in use. **If every config fails (Leo, 2026-11-27):** show a popup that says no VPN server answered, and turn the feature off automatically, so browsing goes on over the normal connection. Leo turns it back on himself. Periodically retry the preferred config so it switches back once that server is up again.
 
 ## Suggested order of work
 

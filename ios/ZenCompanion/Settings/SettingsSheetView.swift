@@ -369,15 +369,6 @@ struct SettingsSheet: View {
                         SettingsExternalMark(scheme: scheme)
                     }
                 }
-
-                SettingsHairline(scheme: scheme)
-
-                Link(destination: Legal.writeReviewURL) {
-                    SettingsRow(title: "legal.write_review", systemImage: "star", scheme: scheme) {
-                        EmptyView()
-                    }
-                }
-                .buttonStyle(PressedButtonStyle())
             }
             .liftCard(scheme)
         }

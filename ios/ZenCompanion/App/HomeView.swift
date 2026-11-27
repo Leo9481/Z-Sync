@@ -6,8 +6,6 @@ enum Legal {
     static let publicPolicyURL = URL(string: "https://github.com/Kjell6/Z-Sync/blob/main/docs/privacy.md")!
     static var supportURL: URL { URL(string: "mailto:\(supportEmail)")! }
     static let feedbackURL = URL(string: "https://github.com/Kjell6/Z-Sync/issues")!
-    /// Direct App Store deep link to the "Write a Review" page.
-    static let writeReviewURL = URL(string: "https://apps.apple.com/app/id6804470330?action=write-review")!
 }
 
 /// Entry point: the spaces browser, signed in or not. Signed out it shows the
