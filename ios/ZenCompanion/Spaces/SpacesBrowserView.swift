@@ -67,6 +67,10 @@ struct SpacesBrowserView: View {
     /// The mini-browser is a page, not a sheet: it fills the screen on every
     /// size class, and its own close control is the only way out.
     @State private var browserSession: BrowserTabSession?
+    /// The sidebar (this spaces screen) slides in from the left over the
+    /// browser, which is the app's base layer. The browser stays mounted under
+    /// it until the slide ends, then leaves until the sidebar goes again.
+    @State private var sidebarShown: Bool
     /// Once-per-app-version release notes. Marked as presented as soon as the
     /// sheet opens, so a relaunch does not show it again.
     @State private var whatsNew: WhatsNewStore
@@ -98,9 +102,31 @@ struct SpacesBrowserView: View {
         self.onPresentSignInHelp = onPresentSignInHelp
         self.onDemoTap = onDemoTap
         self.isCovered = isCovered
-        _model = State(initialValue: BrowserModel(account: account))
+        let model = BrowserModel(account: account)
+        _model = State(initialValue: model)
         _whatsNew = State(initialValue: WhatsNewStore())
+
+        // Launch straight into the browser, on the very first frame: no
+        // presentation, nothing to slide up. The onboarding, the one-time
+        // content-blocking question and a link from another app go through
+        // the launch task instead.
+        if !Self.openedBrowserThisLaunch, !isCovered, incomingLink == nil, ContentBlocker.shared.asked {
+            Self.openedBrowserThisLaunch = true
+            let pages = OpenPagesStore.shared
+            pages.allowsNormalTabs = model.snapshot.normalTabsCapability.allowsNormalTabs
+            pages.canSave = account != nil
+            pages.resumeOrOpenBlank()
+            _browserSession = State(initialValue: BrowserTabSession(space: model.activeSpace))
+            _sidebarShown = State(initialValue: false)
+        } else {
+            _sidebarShown = State(initialValue: true)
+        }
     }
+
+    /// The browser is what the reader sees, not the sidebar.
+    private var isBrowserUp: Bool { !sidebarShown }
+
+    private static let sidebarSlide = Animation.smooth(duration: 0.35)
 
     private var isSignedIn: Bool { account != nil }
 
@@ -127,6 +153,18 @@ struct SpacesBrowserView: View {
     var body: some View {
         @Bindable var model = model
 
+        ZStack {
+        if let session = browserSession {
+            miniBrowser(session, spaces: model.snapshot.spaces)
+                .onDisappear {
+                    // A pin inside the mini-browser fired while it was up.
+                    if pendingStaleReload {
+                        pendingStaleReload = false
+                        Task { await model.reload() }
+                    }
+                }
+        }
+        if sidebarShown {
         NavigationStack {
             ZStack {
                 ZenSpaceGradientBackground(
@@ -339,6 +377,12 @@ struct SpacesBrowserView: View {
                 .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
+        .compositingGroup()
+        .shadow(color: .black.opacity(0.25), radius: 16)
+        .transition(.move(edge: .leading))
+        .zIndex(1)
+        }
+        }
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
             case .account:
@@ -392,22 +436,12 @@ struct SpacesBrowserView: View {
             // The cover is fully gone: the browser can take the screen now.
             guard let session = browserWaitingForBlocker else { return }
             browserWaitingForBlocker = nil
-            if ContentBlocker.shared.asked { browserSession = session }
+            if ContentBlocker.shared.asked { showBrowser(session) }
         }) {
             ContentBlockingSetupView(scheme: effectiveScheme)
         }
         .onChange(of: ContentBlocker.shared.asked) { _, asked in
             if asked { isAskingBlocker = false }
-        }
-        .fullScreenCover(item: $browserSession) { session in
-            miniBrowser(session, spaces: model.snapshot.spaces)
-                .onDisappear {
-                    // A pin inside the mini-browser fired while it was up.
-                    if pendingStaleReload {
-                        pendingStaleReload = false
-                        Task { await model.reload() }
-                    }
-                }
         }
         .task(id: model.isSignedIn) { await model.initialLoad() }
         .onChange(of: account?.uid) { _, _ in
@@ -421,12 +455,12 @@ struct SpacesBrowserView: View {
             takeIncomingLink()
         }
         .task(id: isCovered) {
-            // Launch straight into the browser, once the onboarding is gone.
+            // A launch that could not start in the browser (onboarding up,
+            // content-blocking question not asked yet): bring it up once the
+            // onboarding is gone.
             guard !isCovered, !Self.openedBrowserThisLaunch else { return }
             Self.openedBrowserThisLaunch = true
-            // One beat, so the cover is not presented mid-appearance.
-            try? await Task.sleep(for: .milliseconds(50))
-            guard browserSession == nil, browserWaitingForBlocker == nil, incomingLink == nil else { return }
+            guard !isBrowserUp, browserWaitingForBlocker == nil, incomingLink == nil else { return }
             resumeBrowser()
         }
         .task {
@@ -437,7 +471,7 @@ struct SpacesBrowserView: View {
             // reaches this task: the Share Extension has its own view
             // controller, so sharing a link never triggers the sheet.
             try? await Task.sleep(for: .milliseconds(450))
-            guard !isDemo, activeSheet == nil, browserSession == nil, !isAskingBlocker,
+            guard !isDemo, activeSheet == nil, !isBrowserUp, !isAskingBlocker,
                   whatsNew.shouldPresent else { return }
             whatsNew.markPresented()
             activeSheet = .whatsNew
@@ -446,6 +480,7 @@ struct SpacesBrowserView: View {
             // A pin inside the browser happens while the browser is up, so the
             // browser has to count as "open" too or the reload runs underneath it.
             guard activeSheet == nil, browserSession == nil else {
+                // The browser is up, or still mounted under a sliding sidebar.
                 pendingStaleReload = true
                 return
             }
@@ -471,7 +506,7 @@ struct SpacesBrowserView: View {
             guard pending else { return }
             // Leave an open browser or settings sheet where the user left it.
             // A link from another app is the page this launch is for.
-            if activeSheet == nil, browserSession == nil, incomingLink == nil {
+            if activeSheet == nil, !isBrowserUp, incomingLink == nil {
                 openNewTab(in: model.activeSpace)
             }
             model.consumeSearchOnOpen()
@@ -642,10 +677,26 @@ struct SpacesBrowserView: View {
     /// later one opens at once.
     private func show(_ session: BrowserTabSession) {
         if ContentBlocker.shared.asked {
-            presentCover { browserSession = session }
+            presentCover { showBrowser(session) }
         } else {
             browserWaitingForBlocker = session
             presentCover { isAskingBlocker = true }
+        }
+    }
+
+    /// Puts the browser under the sidebar, then slides the sidebar away.
+    private func showBrowser(_ session: BrowserTabSession) {
+        browserSession = session
+        withAnimation(Self.sidebarSlide) { sidebarShown = false }
+    }
+
+    /// Slides the sidebar in over the browser. The browser leaves once it is
+    /// fully covered, so its pages are put away as they were with the sheet.
+    private func showSidebar() {
+        withAnimation(Self.sidebarSlide) {
+            sidebarShown = true
+        } completion: {
+            if sidebarShown { browserSession = nil }
         }
     }
 
@@ -670,7 +721,7 @@ struct SpacesBrowserView: View {
             allowsNormalTabs: model.snapshot.normalTabsCapability.allowsNormalTabs,
             canSave: isSignedIn,
             startsInOverview: session.startsInOverview,
-            onDismiss: { browserSession = nil }
+            onDismiss: { showSidebar() }
         )
         // Keyed by the launch: a link that arrives while the browser is up
         // starts its own browser, not the last one with its overview or
