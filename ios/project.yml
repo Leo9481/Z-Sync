@@ -26,9 +26,14 @@ targets:
       - path: ZenCompanion
         excludes:
           - "PrivacyInfo.xcprivacy"
+          - "Vendor/**"
       - path: Shared
       - path: ZenCompanion/PrivacyInfo.xcprivacy
         buildPhase: resources
+      # Fetched by CI at a pinned version (see the workflow); not in the repo.
+      - path: ZenCompanion/Vendor/darkreader.js
+        buildPhase: resources
+        optional: true
       - path: AppIcon.icon
         buildPhase: resources
     info:
@@ -93,6 +98,8 @@ targets:
         MARKETING_VERSION: "1.7"
         CURRENT_PROJECT_VERSION: "7"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # Page translation needs iOS 18; the app still starts on iOS 17.
+        OTHER_LDFLAGS: "$(inherited) -weak_framework Translation"
     dependencies:
       - target: ShareExtension
         embed: true

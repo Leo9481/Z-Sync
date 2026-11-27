@@ -21,6 +21,8 @@ struct MiniBrowserView: View {
     /// control is hidden and no save can be started.
     var canSave = true
     var onDismiss: () -> Void
+    /// The app's settings, from the gear in the overview's row.
+    var onOpenSettings: () -> Void = {}
 
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -104,7 +106,8 @@ struct MiniBrowserView: View {
         allowsNormalTabs: Bool = false,
         canSave: Bool = true,
         startsInOverview: Bool = false,
-        onDismiss: @escaping () -> Void
+        onDismiss: @escaping () -> Void,
+        onOpenSettings: @escaping () -> Void = {}
     ) {
         self.pages = pages
         self.space = space
@@ -112,6 +115,7 @@ struct MiniBrowserView: View {
         self.allowsNormalTabs = allowsNormalTabs
         self.canSave = canSave
         self.onDismiss = onDismiss
+        self.onOpenSettings = onOpenSettings
         _startsInSearch = State(initialValue: pages.active?.model.opensWithSearch ?? false)
         _showOverview = State(initialValue: startsInOverview)
         // From home it comes up with the cover, like the browser does.
@@ -234,6 +238,7 @@ struct MiniBrowserView: View {
                 onDone: {
                     if let page = pages.active { closeOverview(to: page) } else { openNewPage() }
                 },
+                onOpenSettings: onOpenSettings,
                 navBar: {
                     MiniBrowserTopBar(
                         model: model,
@@ -256,6 +261,8 @@ struct MiniBrowserView: View {
                     )
                 }
             )
+            // Page translation borrows Apple's session through the view.
+            .modifier(PageTranslationTask(model: model))
             // On a wide display (iPad, the open iPhone Duo) the bar and the
             // overview's buttons keep a width the thumbs can span, centred,
             // instead of running from edge to edge.

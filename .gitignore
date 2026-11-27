@@ -31,3 +31,6 @@ marketing/
 
 # Local planning notes, not for the public repo
 plans/
+
+# Fetched by CI (see .github/workflows/ios-unsigned-ipa.yml)
+ios/ZenCompanion/Vendor/

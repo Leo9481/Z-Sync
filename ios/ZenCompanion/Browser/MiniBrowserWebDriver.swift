@@ -125,6 +125,12 @@ final class MiniBrowserWebDriver: NSObject, WKNavigationDelegate, WKUIDelegate {
             name: BrowserGeolocation.handlerName
         )
         BrowserGeolocation.addScript(to: configuration.userContentController)
+        // Text a translated page adds later, for the open translation session.
+        configuration.userContentController.add(
+            PageTranslationScript.Handler(model: model),
+            contentWorld: PageTranslationScript.world,
+            name: PageTranslationScript.handlerName
+        )
         // The blocked count's reports. The lists and scripts themselves go on
         // per page, in `decidePolicyFor`.
         configuration.userContentController.add(
@@ -148,7 +154,7 @@ final class MiniBrowserWebDriver: NSObject, WKNavigationDelegate, WKUIDelegate {
         webView.isFindInteractionEnabled = true
         webView.isOpaque = false
         // Sites with a dark look show it in private pages, like the chrome.
-        if model.isPrivate { webView.overrideUserInterfaceStyle = .dark }
+        if model.isPrivate || WebsiteDarkMode.isEnabled { webView.overrideUserInterfaceStyle = .dark }
         webView.backgroundColor = .clear
         webView.scrollView.backgroundColor = .clear
 
@@ -767,6 +773,8 @@ final class MiniBrowserWebDriver: NSObject, WKNavigationDelegate, WKUIDelegate {
             if let model = self.model { model.host?.pageDidFinishLoading(model) }
             self.model?.adoptPageTitle(webView.title ?? "")
             self.model?.recordVisit()
+            // Settings → Translation → Translate automatically.
+            self.model?.translateAutomaticallyIfNeeded()
             // A page whose own scripts rewrote the root style gets the
             // zoom back once it has settled.
             self.model?.applyPageZoom(force: true)

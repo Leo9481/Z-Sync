@@ -514,6 +514,17 @@ final class MiniBrowserModel {
     private(set) var showingOriginal = false
     /// The site's own blocking switches, as a page inside the open menu.
     var menuSiteSettings = false
+    /// Bumped when dark mode for websites changes, so the menu's switches,
+    /// which read a stored setting, redraw.
+    var darkModeGeneration = 0
+    /// Page translation (see `PageTranslation.swift`).
+    var translation: PageTranslationState = .original
+    /// Text waiting for a translation session; the view hands one over.
+    var translationJob: PageTranslationJob?
+    /// Text the translated page adds later, on its way to the open session.
+    @ObservationIgnored var translationFeed: AsyncStream<PageTextBatch>.Continuation?
+    /// Automatic translation looked at this document already.
+    @ObservationIgnored var autoTranslateChecked = false
     @ObservationIgnored private var originalPage: URL?
     @ObservationIgnored private var countedResources = Set<String>()
     /// Reported addresses looked at for this document, counted or not.
@@ -521,6 +532,8 @@ final class MiniBrowserModel {
     @ObservationIgnored private var appliedBlocking: BlockingConfiguration?
     /// Whether the scripts on the web view include the desktop viewport.
     @ObservationIgnored private var appliedDesktopViewport = false
+    /// Whether the scripts on the web view include website dark mode.
+    @ObservationIgnored private var appliedDarkMode: Bool?
     @ObservationIgnored let blocker: ContentBlocker
 
     /// Scroll offset captured when the reader asked for a reload.
@@ -719,6 +732,7 @@ final class MiniBrowserModel {
         driver = nil
         // The next web view starts without the lists and without the zoom.
         appliedBlocking = nil
+        appliedDarkMode = nil
         zoomedWebView = nil
         appliedPageZoom = nil
         reloadScrollY = nil
@@ -1222,6 +1236,7 @@ final class MiniBrowserModel {
         countedResources.removeAll()
         checkedResources = 0
         blockedCount = 0
+        resetTranslation()
     }
 
     // MARK: - Content blocking
@@ -1304,9 +1319,16 @@ final class MiniBrowserModel {
     private func applyBlocking(host: String?) {
         guard let controller = webView?.configuration.userContentController else { return }
         let configuration = blocker.configuration(host: host, original: originalPage != nil)
-        guard configuration != appliedBlocking || requestsDesktopSite != appliedDesktopViewport else { return }
+        let darkMode = WebsiteDarkMode.applies(to: host)
+        // Sites with a dark look of their own show it, in private pages and
+        // with dark mode for websites on.
+        webView?.overrideUserInterfaceStyle = darkMode || isPrivate ? .dark : .unspecified
+        guard configuration != appliedBlocking
+            || requestsDesktopSite != appliedDesktopViewport
+            || darkMode != appliedDarkMode else { return }
         appliedBlocking = configuration
         appliedDesktopViewport = requestsDesktopSite
+        appliedDarkMode = darkMode
         blocker.apply(configuration, to: controller)
         // `apply` clears every user script, this one included.
         BrowserGeolocation.addScript(to: controller)
@@ -1325,6 +1347,28 @@ final class MiniBrowserModel {
                 in: .page
             ))
         }
+        if darkMode {
+            WebsiteDarkMode.addScript(to: controller)
+        }
+    }
+
+    // MARK: - Dark mode for websites
+
+    /// Whether this page has the dark look: on, and not turned off for its site.
+    var websiteDarkModeApplies: Bool { WebsiteDarkMode.applies(to: blockingHost) }
+
+    /// The switch changed: the page on screen follows at once, without a
+    /// reload, and its next pages get the script from the start.
+    func applyWebsiteDarkMode() {
+        guard let webView else { return }
+        let host = currentURL?.host
+        applyBlocking(host: host)
+        if WebsiteDarkMode.applies(to: host), let source = WebsiteDarkMode.enableScript {
+            webView.evaluateJavaScript(source, in: nil, in: WebsiteDarkMode.world, completionHandler: nil)
+        } else {
+            webView.evaluateJavaScript(WebsiteDarkMode.disableScript, in: nil, in: WebsiteDarkMode.world, completionHandler: nil)
+        }
+        darkModeGeneration += 1
     }
 
     /// Per document. A page reports at most 2,000 addresses; this also bounds

@@ -83,6 +83,8 @@ struct MiniBrowserChrome<NavBar: View>: View {
     var onCloseAll: () -> Void = {}
     /// Leaves the overview for the page it was opened from.
     var onDone: () -> Void = {}
+    /// The app's settings, the same sheet as the sidebar's gear.
+    var onOpenSettings: () -> Void = {}
     /// The navigation bar. It stays in place while the menu grows above it.
     @ViewBuilder var navBar: () -> NavBar
 
@@ -283,6 +285,7 @@ struct MiniBrowserChrome<NavBar: View>: View {
     private var overviewRow: some View {
         HStack(spacing: 10) {
             overviewCircle(systemName: "sidebar.left", label: "Sidebar", action: onClose)
+            overviewCircle(systemName: "gearshape", label: "Settings", action: onOpenSettings)
             // Raindrop bookmarks: wired up with the Raindrop milestone.
             overviewCircle(systemName: "cloud", label: "Raindrop bookmarks", enabled: false) {}
             Spacer(minLength: 0)
@@ -421,6 +424,21 @@ struct MiniBrowserChrome<NavBar: View>: View {
             // end, where Arc keeps the same status at the bottom of its sheet.
             if model.blockingCard != .hidden {
                 blockingCard
+            }
+
+            // Translate and dark mode: the page's look, as switches.
+            if MiniBrowserModel.canTranslate || WebsiteDarkMode.isAvailable {
+                VStack(spacing: 0) {
+                    if MiniBrowserModel.canTranslate {
+                        translateRow
+                    }
+                    if WebsiteDarkMode.isAvailable {
+                        if MiniBrowserModel.canTranslate { rowDivider }
+                        darkModeRows
+                    }
+                }
+                .padding(.horizontal, 14)
+                .liftCard(scheme)
             }
 
             // The page tools, grouped into one card. The rows keep their
@@ -657,6 +675,111 @@ struct MiniBrowserChrome<NavBar: View>: View {
         }
         .buttonStyle(CardPressStyle())
         .disabled(model.effectiveURL == nil)
+    }
+
+    /// Translates the page into the reader's language on the device, in place.
+    /// Off puts the original text back.
+    private var translateRow: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "translate")
+                .font(.system(size: 16, weight: .semibold))
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(verbatim: "Translate page")
+                    .zenFont(16, weight: .medium, design: .rounded)
+                if let note = translationNote {
+                    Text(verbatim: note)
+                        .zenFont(13, design: .rounded)
+                        .foregroundStyle(Color.primary.opacity(0.6))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 8)
+            if model.translation == .working {
+                ProgressView()
+                    .controlSize(.small)
+            }
+            Toggle(
+                "",
+                isOn: Binding(
+                    get: { model.isTranslationOn },
+                    set: { _ in model.toggleTranslation() }
+                )
+            )
+            .labelsHidden()
+            .tint(ink)
+        }
+        .foregroundStyle(Color.primary)
+        .frame(minHeight: 44)
+        .disabled(model.effectiveURL == nil)
+    }
+
+    private var translationNote: String? {
+        switch model.translation {
+        case .sameLanguage: return "This page is already in your language."
+        case .failed(let message): return message
+        default: return nil
+        }
+    }
+
+    /// Dark mode for every website, and the same switch for the site on screen.
+    @ViewBuilder
+    private var darkModeRows: some View {
+        // The setting is stored outside the model; this redraws the rows
+        // when it changes.
+        let _ = model.darkModeGeneration
+        HStack(spacing: 12) {
+            Image(systemName: "moon")
+                .font(.system(size: 16, weight: .semibold))
+                .frame(width: 24)
+            Text(verbatim: "Dark mode for websites")
+                .zenFont(16, weight: .medium, design: .rounded)
+                .lineLimit(2)
+            Spacer(minLength: 8)
+            Toggle(
+                "",
+                isOn: Binding(
+                    get: { WebsiteDarkMode.isEnabled },
+                    set: { on in
+                        WebsiteDarkMode.isEnabled = on
+                        for page in pages.pages { page.model.applyWebsiteDarkMode() }
+                        model.darkModeGeneration += 1
+                    }
+                )
+            )
+            .labelsHidden()
+            .tint(ink)
+        }
+        .foregroundStyle(Color.primary)
+        .frame(minHeight: 44)
+
+        if WebsiteDarkMode.isEnabled, let host = model.blockingHost {
+            rowDivider
+            HStack(spacing: 12) {
+                Image(systemName: "globe")
+                    .font(.system(size: 16, weight: .semibold))
+                    .frame(width: 24)
+                Text(verbatim: "On for \(MiniBrowserTopBar.domain(of: model.effectiveURL))")
+                    .zenFont(16, weight: .medium, design: .rounded)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 8)
+                Toggle(
+                    "",
+                    isOn: Binding(
+                        get: { !WebsiteDarkMode.isOff(forHost: host) },
+                        set: { on in
+                            WebsiteDarkMode.setOff(!on, forHost: host)
+                            model.applyWebsiteDarkMode()
+                        }
+                    )
+                )
+                .labelsHidden()
+                .tint(ink)
+            }
+            .foregroundStyle(Color.primary)
+            .frame(minHeight: 44)
+        }
     }
 
     /// The browser's own history. It used to sit on the overview's left button.

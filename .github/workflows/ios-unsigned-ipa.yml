@@ -29,6 +29,27 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      # Dark mode for websites. Pinned version, checked against npm's own
+      # integrity hash, so the build only ever bundles this exact file.
+      - name: Fetch Dark Reader (MIT)
+        env:
+          DARKREADER_VERSION: "4.9.135"
+          DARKREADER_SHA512: "h/gmS/KzY8HgmsgOSFh7ssJnsC5ymuhIwZqxksPKCS1K400OUJyjDPZN1L2YIrzX+oezhVUNnCDZPfmPUvdJNA=="
+        run: |
+          set -euo pipefail
+          TGZ="$RUNNER_TEMP/darkreader.tgz"
+          curl -fsSL -o "$TGZ" "https://registry.npmjs.org/darkreader/-/darkreader-$DARKREADER_VERSION.tgz"
+          ACTUAL=$(openssl dgst -sha512 -binary "$TGZ" | base64 | tr -d '\n')
+          if [ "$ACTUAL" != "$DARKREADER_SHA512" ]; then
+            echo "Dark Reader download does not match its pinned hash"; exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/darkreader"
+          tar -xzf "$TGZ" -C "$RUNNER_TEMP/darkreader"
+          mkdir -p ZenCompanion/Vendor
+          cp "$RUNNER_TEMP/darkreader/package/darkreader.js" ZenCompanion/Vendor/darkreader.js
+          cp "$RUNNER_TEMP/darkreader/package/LICENSE" ZenCompanion/Vendor/darkreader-LICENSE.txt || true
+          ls -lh ZenCompanion/Vendor
+
       - name: Generate Xcode project
         run: xcodegen generate
 
