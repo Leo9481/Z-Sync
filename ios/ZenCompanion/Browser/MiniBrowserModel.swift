@@ -521,6 +521,8 @@ final class MiniBrowserModel {
     var translation: PageTranslationState = .original
     /// Text waiting for a translation session; the view hands one over.
     var translationJob: PageTranslationJob?
+    /// Text the translated page adds later, on its way to the open session.
+    @ObservationIgnored var translationFeed: AsyncStream<PageTextBatch>.Continuation?
     @ObservationIgnored private var originalPage: URL?
     @ObservationIgnored private var countedResources = Set<String>()
     /// Reported addresses looked at for this document, counted or not.

@@ -125,6 +125,12 @@ final class MiniBrowserWebDriver: NSObject, WKNavigationDelegate, WKUIDelegate {
             name: BrowserGeolocation.handlerName
         )
         BrowserGeolocation.addScript(to: configuration.userContentController)
+        // Text a translated page adds later, for the open translation session.
+        configuration.userContentController.add(
+            PageTranslationScript.Handler(model: model),
+            contentWorld: PageTranslationScript.world,
+            name: PageTranslationScript.handlerName
+        )
         // The blocked count's reports. The lists and scripts themselves go on
         // per page, in `decidePolicyFor`.
         configuration.userContentController.add(
