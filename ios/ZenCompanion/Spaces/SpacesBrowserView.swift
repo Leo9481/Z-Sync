@@ -81,6 +81,9 @@ struct SpacesBrowserView: View {
     /// The browser that waits for the content-blocking answer, so its first
     /// page already loads with the reader's choice.
     @State private var browserWaitingForBlocker: BrowserTabSession?
+    /// A plain screen over the sidebar until the launch browser is up, so the
+    /// sidebar never shows for a moment before it.
+    @State private var showsLaunchCurtain = !SpacesBrowserView.openedBrowserThisLaunch
 
     init(
         account: AccountSnapshot?,
@@ -389,6 +392,11 @@ struct SpacesBrowserView: View {
                     .presentationDragIndicator(.visible)
             }
         }
+        .overlay {
+            if showsLaunchCurtain {
+                Color(uiColor: .systemBackground).ignoresSafeArea()
+            }
+        }
         // Asked once, in front of the first browser the reader opens.
         .fullScreenCover(isPresented: $isAskingBlocker, onDismiss: {
             // The cover is fully gone: the browser can take the screen now.
@@ -403,6 +411,7 @@ struct SpacesBrowserView: View {
         }
         .fullScreenCover(item: $browserSession) { session in
             miniBrowser(session, spaces: model.snapshot.spaces)
+                .onAppear { showsLaunchCurtain = false }
                 .onDisappear {
                     // A pin inside the mini-browser fired while it was up.
                     if pendingStaleReload {
@@ -428,8 +437,14 @@ struct SpacesBrowserView: View {
             Self.openedBrowserThisLaunch = true
             // One beat, so the cover is not presented mid-appearance.
             try? await Task.sleep(for: .milliseconds(50))
-            guard browserSession == nil, browserWaitingForBlocker == nil, incomingLink == nil else { return }
+            guard browserSession == nil, browserWaitingForBlocker == nil, incomingLink == nil else {
+                showsLaunchCurtain = false
+                return
+            }
             resumeBrowser(animated: false)
+            // The first launch asks the content-blocking question before the
+            // browser: the sidebar may show behind that question.
+            if browserWaitingForBlocker != nil { showsLaunchCurtain = false }
         }
         .task {
             // Show release notes once per app version, after the first frame
