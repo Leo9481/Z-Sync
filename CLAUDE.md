@@ -75,6 +75,13 @@ Both live in the page menu (the ☰ button in the address pill).
 - **Translate page:** use Apple's on-device Translation framework (private, free, no API key). Collect the page's text nodes with an injected script, translate them in batches with `TranslationSession`, and write them back in place. Offer "Show original" to undo. The framework's programmatic API needs iOS 18, so on iOS 17 hide the item. **(Verify the current API before coding.)**
 - **Dark mode for websites:** one global toggle in the menu, applied to every page. Use Dark Reader's dynamic theme engine (MIT license), injected as a `WKUserScript`, so pages that are already dark stay as they are. Allow turning it off for one site. **(Verify the license and the current release.)**
 
+### 8. Browser-only VPN (Proton WireGuard), added 2026-11-27
+- Goal: a toggle that sends only the browser's traffic through Leo's Proton VPN. The rest of the phone is untouched. iCloud Private Relay can't be used (no API for third-party browsers), and Proton offers no SOCKS/HTTP proxies, so this is the route.
+- How: run a userspace WireGuard client inside the app (for example wireguard-go with a userspace network stack, exposing a local SOCKS5 proxy, like wireproxy). Point WebKit at it with `WKWebsiteDataStore.proxyConfigurations` (iOS 17+). This is the same pattern Onion Browser uses for Tor. Build the library in CI, like adblock-rust. **(Verify current libraries, licenses and the proxyConfigurations behaviour before coding.)**
+- Leo imports a WireGuard config file downloaded from his Proton account. The file holds a private key: store it in the Keychain only, never in the repo, logs or CI.
+- Scope of the toggle: start with a global on/off in the page menu or settings. Consider "always on for private tabs" later. Runs only while the app is open. It uses one of Proton's device connections.
+- If the tunnel is down while the toggle is on, fail closed: show an error instead of loading pages directly.
+
 ## Suggested order of work
 
 1. Get the fork building: unsigned-IPA workflow in GitHub Actions, and confirm it installs on Leo's phone.
@@ -85,7 +92,8 @@ Both live in the page menu (the ☰ button in the address pill).
 6. Popup and redirect blocking.
 7. Raindrop.io integration and quick-bookmark button.
 8. Filter lists, then cosmetic filters and scriptlets, then auto-updates.
-9. Frosted-glass polish and fullscreen button, tuned on the real phone.
+9. Browser-only VPN through Proton WireGuard.
+10. Frosted-glass polish and fullscreen button, tuned on the real phone.
 
 ## Open questions to answer by reading the code first
 
