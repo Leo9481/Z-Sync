@@ -30,22 +30,26 @@ The current Z-Sync sidebar screen stays as a **1:1 real-time mirror of the deskt
 ### 1. Browser shell
 - `WKWebView`-based browser with a minimal Safari-style UI.
 - Floating buttons in a **frosted-glass** style built on SwiftUI blur materials with a custom tint and border. Do not depend on Apple's native Liquid Glass API, so the look stays stable across iOS versions.
-- Two extra quick buttons beyond Safari's: **fullscreen** (hides the bars) and **quick bookmark** (tap saves to a default Raindrop collection, long-press chooses a collection).
+- Two extra quick buttons beyond Safari's: **fullscreen** (hides the bars) and **quick bookmark** (tap saves to a default Raindrop collection, long-press chooses a collection). The quick-bookmark icon is Raindrop's cloud logo.
+- The browser is the app's root screen. Bottom bar is one row, laid out like Safari's (decided with Leo, 2026-11-27):
+  `[‹ ›]  [☰  ⤢  domain  ☁  ↻]  [⧉]`. Left: a back/forward capsule, with forward only shown when there is a page to go forward to. Center: the address pill holding the page menu, fullscreen, the domain, Raindrop quick bookmark and reload/stop, with tighter side padding than Safari so the domain keeps room. Right: the tabs button.
+- No close (✕) button, no second row, no gradient or scrim behind the bar. No microphone or voice search (Leo uses the keyboard's dictation).
 
 ### 2. Tab manager (Safari-style)
 - A tab grid like Safari's, using `LazyVGrid` and thumbnails from `WKWebView.takeSnapshot`.
-- Bottom bar with a **"Private | Tabs"** pill, a `+` button, and a done button.
+- Bottom bar with a **"Private | Tabs"** pill, a `+` button, and a done button. It also holds the **sidebar** button (the only way into the sidebar) and a **Raindrop bookmarks** button that opens all Raindrop collections and bookmarks.
 - Each card has a close button at the top right and a **"send to desktop" button at the bottom left**, with a short confirmation (checkmark) after sending.
-- Leo often has around 30 tabs open, so keep only a few live web views in memory. The rest become snapshots and reload on demand. Persist tab state (for example `interactionState`) so tabs survive app restarts.
+- Memory: use the efficient, standard approach. Keep a few live web views (`OpenPagesStore.liveLimit`), and let the rest sleep with their snapshot and history and wake on demand. Persist tabs so they survive restarts. Tabs do not expire by default.
 - Mobile tabs are **separate from desktop tabs**. Nothing syncs automatically from mobile to desktop.
 
 ### 3. Sidebar view
 - A separate button opens the existing sidebar screen above.
 - Tapping a tab or pinned tab there opens a **local copy** as a mobile tab. This replaces the current quick browser.
 
-### 4. Send to desktop
-- Sends the tab's link so it appears as a **regular open tab in the Default Workspace** in desktop Zen, in the same list as the other open tabs. No space picker, since Leo uses only the Default Workspace.
-- Z-Sync already has a "share a link into a space" feature **(verify)**. Reuse it if it can add a normal tab to the default space, and tell Leo if it cannot.
+### 4. Send to desktop (Send Tab to Device)
+- Decided 2026-11-27: implement Firefox's **Send Tab to Device** over Firefox Account device commands, not by writing a tab into the spaces collection. A spaces write only shows up after desktop Zen re-syncs (often a restart). Send Tab arrives within seconds, in the active workspace.
+- Register the app as an FxA device with the send-tab command so it also shows in desktop Zen's "Send to device" list. Receiving on the phone is checked when the app opens (no Mozilla push credentials).
+- Verify the protocol against Mozilla's docs and the Firefox iOS / application-services source before coding. Keep it separate from the spaces sync code. The existing Share-sheet "save into a space" feature stays.
 
 ### 5. Ad blocking
 Leo's benchmark is sketchy streaming sites full of popups, popunders, fake play buttons and banners. YouTube is not a priority.

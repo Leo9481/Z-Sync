@@ -70,7 +70,8 @@ final class OpenPage: Identifiable {
     }
 }
 
-/// How long a page stays once the user has left it. A month by default.
+/// How long a page stays once the user has left it. Forever by default: the
+/// browser is the app's main screen, so tabs behave like any browser's.
 enum KeptPageLifetime: String, CaseIterable, Identifiable {
     case never
     case day
@@ -100,7 +101,7 @@ enum KeptPageLifetime: String, CaseIterable, Identifiable {
     @MainActor
     static func stored(in preferences: PreferencesStoring) -> KeptPageLifetime {
         preferences.string(PreferenceKeys.keptPageLifetime, scope: .standard)
-            .flatMap(KeptPageLifetime.init(rawValue:)) ?? .month
+            .flatMap(KeptPageLifetime.init(rawValue:)) ?? .never
     }
 }
 
@@ -441,6 +442,33 @@ final class OpenPagesStore: MiniBrowserPageHost {
             page.openerID = nil
         }
         persist()
+    }
+
+    /// The browser stepped aside for the sidebar. Unlike `endBrowserSession`,
+    /// every page stays open with its web view, and the one on screen stays
+    /// the active page, so coming back is instant. What would stay is saved
+    /// now, as on going to the background.
+    func suspend() {
+        if let active {
+            active.model.didLeaveScreen()
+            active.lastUsedAt = now()
+        }
+        for page in pages {
+            page.model.commitPendingPinSave()
+            saveIfItStays(page)
+            saveHistory(of: page)
+        }
+        persist()
+    }
+
+    /// Puts the browser back on screen: the page used last, or a new blank
+    /// page when none is open.
+    func resumeOrOpenBlank() {
+        if let id = activeID ?? recencyOrder.last?.id {
+            activate(id)
+        } else {
+            open(url: nil)
+        }
     }
 
     /// Pages past the chosen lifetime close by themselves. The page on

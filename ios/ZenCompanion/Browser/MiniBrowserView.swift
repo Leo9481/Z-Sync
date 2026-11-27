@@ -451,16 +451,18 @@ struct MiniBrowserView: View {
             }
             .onChange(of: pages.activeID) { _, id in
                 guard id != nil else {
-                    // The overview stays up empty, like Safari's; its Done goes.
-                    if !showOverview { onDismiss() }
+                    // The overview stays up empty, like Safari's. Anywhere
+                    // else the browser is the app's main screen, so the last
+                    // page closing leaves a new blank page, not the sidebar.
+                    if !showOverview { pages.open(url: nil) }
                     return
                 }
                 activePageChanged()
             }
             .onDisappear {
-                // The cover can go without the close button, for one with the
-                // session. Whatever is still open ends the same way.
-                if pages.activeID != nil { pages.endBrowserSession() }
+                // The browser steps aside for the sidebar: every page stays
+                // open and the active one stays active for the way back.
+                pages.suspend()
             }
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
                 let overlap = Self.keyboardOverlap(from: note)
@@ -718,8 +720,8 @@ struct MiniBrowserView: View {
 }
 
 private extension MiniBrowserView {
-    /// Closes the browser. What happens to each page is the store's call; the
-    /// picture for the list is taken before the page goes away.
+    /// Steps aside for the sidebar. Every page stays open (`OpenPagesStore.suspend`);
+    /// the picture for the list is taken before the page leaves the screen.
     private func leaveBrowser() {
         guard !leaving else { return }
         leaving = true
@@ -1244,13 +1246,17 @@ private extension MiniBrowserView {
             }
         } else if let page = pages.active {
             // A new page nothing was typed into: it ends, and the page before
-            // it comes back. The last one closes the browser.
+            // it comes back. The last one stays, as a blank page with the
+            // keyboard down: the browser is the main screen.
             if let previous = pages.neighbours.previous {
                 slideBack(from: page, to: previous)
             } else if pages.pages.count > 1 {
                 pages.close(page.id)
+            } else if isAddressFocused {
+                isAddressFocused = false
             } else {
-                leaveBrowser()
+                editingAddress = false
+                startsInSearch = false
             }
         }
     }
@@ -1296,11 +1302,8 @@ private extension MiniBrowserView {
             onOpenExternally: { model.openCurrentInExternalBrowser() },
             onLeave: {
                 guard model.leaveErrorPage(), let page = pages.active else { return }
-                if page.openerID != nil {
-                    pages.close(page.id)
-                } else {
-                    leaveBrowser()
-                }
+                // Closing the last page leaves a blank one (`activeID` handler).
+                pages.close(page.id)
             }
         )
     }

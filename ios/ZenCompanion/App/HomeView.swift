@@ -41,7 +41,8 @@ struct HomeView: View {
             onConsumeIncomingLink: { model.consumePendingOpenURL() },
             onPresentSignIn: { model.presentSignIn() },
             onPresentSignInHelp: { model.presentSignInHelp() },
-            onDemoTap: { model.registerDemoTap() }
+            onDemoTap: { model.registerDemoTap() },
+            isCovered: showsOnboarding
         )
         // One screen per session. Signing in or out builds the home anew, the
         // same way a launch does, instead of switching the old one in place:
