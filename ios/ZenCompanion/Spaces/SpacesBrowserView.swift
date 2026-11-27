@@ -721,7 +721,9 @@ struct SpacesBrowserView: View {
             allowsNormalTabs: model.snapshot.normalTabsCapability.allowsNormalTabs,
             canSave: isSignedIn,
             startsInOverview: session.startsInOverview,
-            onDismiss: { showSidebar() }
+            onDismiss: { showSidebar() },
+            // The same settings sheet as the sidebar's gear, over the browser.
+            onOpenSettings: { activeSheet = .account }
         )
         // Keyed by the launch: a link that arrives while the browser is up
         // starts its own browser, not the last one with its overview or

@@ -5,10 +5,8 @@ import WebKit
 /// https://github.com/darkreader/darkreader). The library is fetched by CI at a
 /// pinned version (see the workflow) and bundled as `darkreader.js`.
 ///
-/// One global switch, plus a list of sites it is turned off for. Pages that
-/// already have their own dark look (they declare `color-scheme: dark` or
-/// style `prefers-color-scheme: dark`) keep it: the web view asks for dark,
-/// and Dark Reader steps aside.
+/// One global switch, plus a list of sites it is turned off for. The web view
+/// also asks pages for their own dark look (`prefers-color-scheme: dark`).
 @MainActor
 enum WebsiteDarkMode {
     /// Its own world, so the page's scripts cannot see or break it.
@@ -46,9 +44,10 @@ enum WebsiteDarkMode {
         isAvailable && isEnabled && !isOff(forHost: host)
     }
 
-    /// The library and the call that turns it on.
+    /// The library (once per document) and the call that turns it on. A page
+    /// that already has it just turns it back on.
     static var enableScript: String? {
-        library.map { $0 + "\n" + bootstrap }
+        library.map { "if (!window.DarkReader) {\n" + $0 + "\n}\n" + bootstrap }
     }
 
     static let disableScript = "if (window.DarkReader) { DarkReader.disable(); }"
@@ -73,40 +72,16 @@ enum WebsiteDarkMode {
         return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
     }
 
-    /// Turns Dark Reader on at once, so the page never flashes white, then
-    /// turns it off again if the page turns out to have a dark look of its own.
+    /// Turns Dark Reader on at once, so the page never flashes white. It is
+    /// not turned off for pages that look dark already: having dark-mode
+    /// styles is not the same as using them (Wikipedia ships them but stays
+    /// light unless its own setting says otherwise), and Dark Reader keeps
+    /// an already dark page dark. "On for this site" covers the rest.
     private static let bootstrap = """
     (function () {
       if (!window.DarkReader) { return; }
       try { DarkReader.setFetchMethod(window.fetch.bind(window)); } catch (e) {}
       DarkReader.enable({ brightness: 100, contrast: 95, sepia: 0 });
-
-      function hasOwnDarkLook() {
-        var meta = document.querySelector('meta[name="color-scheme"]');
-        if (meta && /\\bdark\\b/.test(meta.content || '')) { return true; }
-        var sheets = document.styleSheets;
-        for (var i = 0; i < sheets.length; i++) {
-          var owner = sheets[i].ownerNode;
-          if (owner && owner.classList && owner.classList.contains('darkreader')) { continue; }
-          var rules;
-          try { rules = sheets[i].cssRules; } catch (e) { continue; }
-          if (!rules) { continue; }
-          for (var j = 0; j < rules.length; j++) {
-            var media = rules[j].media;
-            if (media && /prefers-color-scheme\\s*:\\s*dark/.test(media.mediaText)) { return true; }
-          }
-        }
-        return false;
-      }
-
-      function check() {
-        if (hasOwnDarkLook()) { DarkReader.disable(); }
-      }
-      if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', check, { once: true });
-      } else {
-        check();
-      }
     })();
     """
 }

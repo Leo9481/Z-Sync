@@ -83,6 +83,8 @@ struct MiniBrowserChrome<NavBar: View>: View {
     var onCloseAll: () -> Void = {}
     /// Leaves the overview for the page it was opened from.
     var onDone: () -> Void = {}
+    /// The app's settings, the same sheet as the sidebar's gear.
+    var onOpenSettings: () -> Void = {}
     /// The navigation bar. It stays in place while the menu grows above it.
     @ViewBuilder var navBar: () -> NavBar
 
@@ -283,6 +285,7 @@ struct MiniBrowserChrome<NavBar: View>: View {
     private var overviewRow: some View {
         HStack(spacing: 10) {
             overviewCircle(systemName: "sidebar.left", label: "Sidebar", action: onClose)
+            overviewCircle(systemName: "gearshape", label: "Settings", action: onOpenSettings)
             // Raindrop bookmarks: wired up with the Raindrop milestone.
             overviewCircle(systemName: "cloud", label: "Raindrop bookmarks", enabled: false) {}
             Spacer(minLength: 0)
