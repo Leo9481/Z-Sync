@@ -34,6 +34,10 @@ final class PrivateTabsSettings {
 
     /// Unlocked for this visit to the private section.
     private(set) var isUnlocked = false
+    /// Just unlocked: the Face ID sheet itself keeps the app "not in front"
+    /// for a moment after it succeeds, and the app-switcher cover must not
+    /// wait for that. Cleared once the app is back in front.
+    private(set) var justUnlocked = false
     /// The lock asked once since it last locked; it does not ask again by
     /// itself after the reader cancels.
     var askedSinceLocked = false
@@ -49,7 +53,18 @@ final class PrivateTabsSettings {
     /// Locks again: leaving the private section, or the app going away.
     func lock() {
         isUnlocked = false
+        justUnlocked = false
         askedSinceLocked = false
+    }
+
+    /// Follows the app: back in front ends the moment right after an unlock;
+    /// in the background the section locks.
+    func sceneChanged(to phase: ScenePhase) {
+        switch phase {
+        case .active: justUnlocked = false
+        case .background: lock()
+        default: break
+        }
     }
 
     /// Asks for Face ID / Touch ID or the passcode. A phone without a passcode
@@ -68,6 +83,15 @@ final class PrivateTabsSettings {
                 localizedReason: "Unlock your private tabs"
             )
             isUnlocked = ok
+            justUnlocked = ok
+            if ok {
+                // Should the app already be in front, this must not linger and
+                // let the app switcher see the tabs later.
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .seconds(3))
+                    self?.justUnlocked = false
+                }
+            }
             return ok
         } catch {
             return false

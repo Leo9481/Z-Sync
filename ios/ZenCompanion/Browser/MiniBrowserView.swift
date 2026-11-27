@@ -431,7 +431,7 @@ struct MiniBrowserView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
             .animation(.easeOut(duration: 0.2), value: privateSectionCovered)
             .onChange(of: scenePhase) { _, phase in
-                if phase == .background { privateTabs.lock() }
+                privateTabs.sceneChanged(to: phase)
                 askToUnlockIfNeeded()
             }
             .background {
@@ -747,9 +747,11 @@ private extension MiniBrowserView {
 
     /// The lock cover is up: the private section with the lock on, while it
     /// is locked or the app is not in front (the app switcher's picture).
+    /// Right after Face ID succeeds the app is still "not in front" while the
+    /// system sheet goes; the cover leaves at once anyway.
     var privateSectionCovered: Bool {
         pages.showsPrivate && privateTabs.lockEnabled
-            && (!privateTabs.isUnlocked || scenePhase != .active)
+            && (!privateTabs.isUnlocked || (scenePhase != .active && !privateTabs.justUnlocked))
     }
 
     /// Back in front with the private section locked: Face ID asks once by
