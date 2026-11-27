@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 /// How round this display's corners are. Apple has no public API for it, so
 /// the values come by panel height; only home-button phones and unknown panels
@@ -153,6 +154,9 @@ final class GridScrollDriver: NSObject {
     private var velocity: Double = 0
     /// A fixed place to spring to; with none it coasts, then keeps in bounds.
     private var target: Double?
+    /// A steady speed (points a second) until stopped or an end is reached:
+    /// a card held at the grid's edge scrolls it.
+    private var glideSpeed: Double?
     private var read: () -> CGFloat = { 0 }
     private var write: (CGFloat) -> Void = { _ in }
     private var bounds: () -> ClosedRange<CGFloat> = { 0...0 }
@@ -183,12 +187,26 @@ final class GridScrollDriver: NSObject {
         start(read: read, write: write, bounds: bounds)
     }
 
+    /// Moves at a steady `speed` until stopped.
+    func glide(
+        speed: CGFloat,
+        read: @escaping () -> CGFloat,
+        write: @escaping (CGFloat) -> Void,
+        bounds: @escaping () -> ClosedRange<CGFloat>
+    ) {
+        velocity = 0
+        target = nil
+        glideSpeed = Double(speed)
+        start(read: read, write: write, bounds: bounds)
+    }
+
     func stop() {
         link?.invalidate()
         link = nil
         lastTime = nil
         velocity = 0
         target = nil
+        glideSpeed = nil
     }
 
     private func start(
@@ -217,6 +235,13 @@ final class GridScrollDriver: NSObject {
         let range = bounds()
         let low = Double(range.lowerBound)
         let high = Double(range.upperBound)
+
+        if let glideSpeed {
+            let next = min(high, max(low, position + glideSpeed * dt))
+            write(CGFloat(next))
+            if next == low || next == high { stop() }
+            return
+        }
 
         if target == nil, position >= low, position <= high {
             // Coasting inside the grid.
@@ -279,6 +304,8 @@ struct OpenPagesOverview: View {
     @State private var swipedID: String?
     @State private var swipe: CGFloat = 0
     @State private var driver = GridScrollDriver()
+    /// The card lifted to be moved elsewhere in the grid.
+    @State private var draggingID: String?
 
     private enum DragAxis { case vertical, sideways, ignored }
 
@@ -300,7 +327,13 @@ struct OpenPagesOverview: View {
                 } else {
                     cards(grid)
                 }
+
+                if draggingID != nil {
+                    edgeZones(grid)
+                }
             }
+            // A card let go of anywhere else stays where it was moved to.
+            .onDrop(of: [.text], delegate: GridDropEnd(draggingID: $draggingID, driver: driver))
             .simultaneousGesture(gridGesture(grid))
             .onChange(of: pages.pages.map(\.id)) { _, _ in
                 // A page can go without passing through `close`: a popup
@@ -368,11 +401,19 @@ struct OpenPagesOverview: View {
                         isNear: grid.isNear(index: index, scroll: scroll),
                         isExpanding: isExpanding,
                         expansion: grown,
+                        isLifted: page.id == draggingID,
                         onOpen: {
                             driver.stop()
+                            draggingID = nil
                             onOpen(page)
                         },
-                        onClose: { close(page) }
+                        onClose: { close(page) },
+                        onLift: {
+                            driver.stop()
+                            draggingID = page.id
+                            return NSItemProvider(object: page.id as NSString)
+                        },
+                        drop: CardDrop(targetID: page.id, draggingID: $draggingID, pages: pages)
                     ) {
                         menu(for: page)
                     }
@@ -392,6 +433,32 @@ struct OpenPagesOverview: View {
 
     private static let gridSpace = "OpenPagesOverview.grid"
 
+    /// While a card is lifted: holding it near the top or the bottom of the
+    /// grid scrolls the grid that way.
+    private func edgeZones(_ grid: PageGridGeometry) -> some View {
+        let depth: CGFloat = 70
+        let bottom = grid.screen.height - bottomClearance
+        return ZStack(alignment: .topLeading) {
+            // The drop area is set before `position`, which would stretch it
+            // over the whole screen.
+            Color.clear
+                .frame(width: grid.screen.width, height: depth)
+                .contentShape(Rectangle())
+                .onDrop(of: [.text], delegate: EdgeDrop(speed: -700, draggingID: $draggingID, start: { glide($0, grid) }, stop: { driver.stop() }))
+                .position(x: grid.screen.width / 2, y: topInset + depth / 2)
+            Color.clear
+                .frame(width: grid.screen.width, height: depth)
+                .contentShape(Rectangle())
+                .onDrop(of: [.text], delegate: EdgeDrop(speed: 700, draggingID: $draggingID, start: { glide($0, grid) }, stop: { driver.stop() }))
+                .position(x: grid.screen.width / 2, y: bottom - depth / 2)
+        }
+        .frame(width: grid.screen.width, height: grid.screen.height)
+    }
+
+    private func glide(_ speed: CGFloat, _ grid: PageGridGeometry) {
+        drive(grid) { $0.glide(speed: speed, read: $1, write: $2, bounds: $3) }
+    }
+
     /// One finger, one decision: up and down scrolls the grid, sideways on a
     /// card swipes it away. Both follow the finger and hand its speed on.
     private func gridGesture(_ grid: PageGridGeometry) -> some Gesture {
@@ -400,6 +467,7 @@ struct OpenPagesOverview: View {
                 if dragAxis == nil { chooseAxis(for: value, in: grid) }
                 switch dragAxis {
                 case .vertical:
+                    guard draggingID == nil else { return }
                     let start = dragStartScroll ?? scroll
                     scroll = grid.rubberBanded(start - value.translation.height)
                 case .sideways:
@@ -413,7 +481,8 @@ struct OpenPagesOverview: View {
                 dragAxis = nil
                 dragStartScroll = nil
                 switch axis {
-                case .vertical: settle(value, in: grid)
+                case .vertical:
+                    if draggingID == nil { settle(value, in: grid) }
                 case .sideways: releaseSwipe(value, in: grid)
                 default: break
                 }
@@ -654,6 +723,65 @@ struct OpenPagesOverview: View {
     }
 }
 
+/// A lifted card over another one: it takes that card's place in the order,
+/// and the cards between slide over.
+private struct CardDrop: DropDelegate {
+    let targetID: String
+    @Binding var draggingID: String?
+    let pages: OpenPagesStore
+
+    func validateDrop(info: DropInfo) -> Bool { draggingID != nil }
+
+    func dropEntered(info: DropInfo) {
+        guard let moving = draggingID, moving != targetID else { return }
+        AppServices.haptics.selectionChanged()
+        withAnimation(.spring(duration: 0.32, bounce: 0)) {
+            pages.move(moving, onto: targetID)
+        }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
+
+    func performDrop(info: DropInfo) -> Bool {
+        draggingID = nil
+        return true
+    }
+}
+
+/// The top or bottom edge of the grid while a card is held there.
+private struct EdgeDrop: DropDelegate {
+    let speed: CGFloat
+    @Binding var draggingID: String?
+    let start: (CGFloat) -> Void
+    let stop: () -> Void
+
+    func validateDrop(info: DropInfo) -> Bool { draggingID != nil }
+    func dropEntered(info: DropInfo) { start(speed) }
+    func dropExited(info: DropInfo) { stop() }
+    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
+
+    func performDrop(info: DropInfo) -> Bool {
+        stop()
+        draggingID = nil
+        return true
+    }
+}
+
+/// A lifted card let go of between cards: the order is already as it should be.
+private struct GridDropEnd: DropDelegate {
+    @Binding var draggingID: String?
+    let driver: GridScrollDriver
+
+    func validateDrop(info: DropInfo) -> Bool { draggingID != nil }
+    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
+
+    func performDrop(info: DropInfo) -> Bool {
+        driver.stop()
+        draggingID = nil
+        return true
+    }
+}
+
 /// `focus` jumps to where an animation ends, so a card can still be on screen
 /// after it left the window: it lets go of its picture only after a moment.
 private let pictureDropDelay: Duration = .milliseconds(600)
@@ -674,8 +802,12 @@ private struct OpenPageCard<Menu: View>: View {
     let isExpanding: Bool
     /// 1 is grown to the whole page.
     let expansion: CGFloat
+    /// Picked up to be moved: its place stays, faint.
+    let isLifted: Bool
     var onOpen: () -> Void
     var onClose: () -> Void
+    var onLift: () -> NSItemProvider
+    let drop: CardDrop
     @ViewBuilder var menu: () -> Menu
 
     @Environment(\.colorScheme) private var scheme
@@ -712,8 +844,13 @@ private struct OpenPageCard<Menu: View>: View {
             .opacity(hidesPicture ? 0 : 1)
             .contentShape(shape)
             .contentShape(.contextMenuPreview, shape)
+            .contentShape(.dragPreview, shape)
             .onTapGesture(perform: onOpen)
             .contextMenu { menu() }
+            // Held, then moved: like Safari, the menu gives way to the drag.
+            .onDrag(onLift)
+            .onDrop(of: [.text], delegate: drop)
+            .opacity(isLifted ? 0.3 : 1)
             .overlay(alignment: .topTrailing) {
                 closeButton
                     .opacity(hidesPicture ? 0 : controlsOpacity)
