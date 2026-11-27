@@ -604,8 +604,33 @@ private struct PagesSettingsPage: View {
                 )
             }
             .liftCard(scheme)
+
+            SettingsSection(title: "Private tabs", scheme: scheme) {
+                VStack(spacing: 0) {
+                    SettingsToggleRow(
+                        title: "Lock private tabs",
+                        systemImage: "faceid",
+                        scheme: scheme,
+                        subtitle: "Face ID or passcode every time you open them",
+                        isOn: $privateTabs.lockEnabled
+                    )
+
+                    SettingsHairline(scheme: scheme)
+
+                    SettingsToggleRow(
+                        title: "Keep private tabs",
+                        systemImage: "eye.slash",
+                        scheme: scheme,
+                        subtitle: "Their data is still wiped: they reload signed out",
+                        isOn: $privateTabs.keepTabs
+                    )
+                }
+                .liftCard(scheme)
+            }
         }
     }
+
+    @Bindable private var privateTabs = PrivateTabsSettings.shared
 }
 
 /// Privacy & blocking: the three blocking switches for every site, and
