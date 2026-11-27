@@ -1,21 +1,45 @@
 import SwiftUI
 
-// MARK: - Liquid Glass View Modifier Helper
+// MARK: - Frosted glass
+
+/// The browser's glass: a blur material with its own tint and a soft edge
+/// that is lit from above. Built on plain materials on purpose, not on
+/// Apple's Liquid Glass, so it looks the same on every iOS version.
+private struct FrostedGlass<S: InsettableShape>: ViewModifier {
+    let shape: S
+    @Environment(\.colorScheme) private var scheme
+
+    func body(content: Content) -> some View {
+        let dark = scheme == .dark
+        content
+            .background {
+                ZStack {
+                    shape.fill(.ultraThinMaterial)
+                    shape.fill(dark ? Color.black.opacity(0.22) : Color.white.opacity(0.38))
+                }
+            }
+            .clipShape(shape)
+            .overlay(
+                shape.strokeBorder(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(dark ? 0.24 : 0.75),
+                            Color.white.opacity(dark ? 0.06 : 0.25),
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    ),
+                    lineWidth: 0.75
+                )
+            )
+    }
+}
 
 extension View {
-    /// Untinted capsule. `interactive` is the same touch flex native glass
-    /// buttons get.
-    @ViewBuilder
+    /// Frosted capsule. `interactive` is kept for the callers that used the
+    /// native glass's touch flex; the frosted glass has none.
     func liquidGlassCapsule(interactive: Bool = false) -> some View {
-        if #available(iOS 26.0, *) {
-            self.glassEffect(interactive ? .regular.interactive() : .regular, in: Capsule())
-        } else {
-            self
-                .background(.ultraThinMaterial, in: Capsule())
-                .overlay(
-                    Capsule().strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.6)
-                )
-        }
+        modifier(FrostedGlass(shape: Capsule(style: .continuous)))
     }
 
     /// Soft lift. No fill: the page stays what the glass samples.
@@ -28,58 +52,21 @@ extension View {
         )
     }
 
-    /// Floating glass capsule: a pill that hovers over the page.
-    @ViewBuilder
+    /// Floating frosted capsule: a pill that hovers over the page.
     func floatingGlassCapsule() -> some View {
-        let shape = Capsule(style: .continuous)
-        if #available(iOS 26.0, *) {
-            self
-                .clipShape(shape)
-                .glassEffect(.regular, in: shape)
-                .shadow(color: .black.opacity(0.20), radius: 16, y: 6)
-        } else {
-            self
-                .background(.ultraThinMaterial, in: shape)
-                .clipShape(shape)
-                .overlay(shape.strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.6))
-                .shadow(color: .black.opacity(0.16), radius: 14, y: 5)
-        }
+        modifier(FrostedGlass(shape: Capsule(style: .continuous)))
+            .shadow(color: .black.opacity(0.18), radius: 14, y: 5)
     }
 
-    /// Floating glass panel, for the open menu.
-    @ViewBuilder
+    /// Floating frosted panel, for the open menu.
     func floatingGlassPanel(cornerRadius: CGFloat) -> some View {
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        if #available(iOS 26.0, *) {
-            self
-                .clipShape(shape)
-                .glassEffect(.regular, in: shape)
-                .shadow(color: .black.opacity(0.22), radius: 18, y: 8)
-        } else {
-            self
-                .background(.ultraThinMaterial, in: shape)
-                .clipShape(shape)
-                .overlay(shape.strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.6))
-                .shadow(color: .black.opacity(0.18), radius: 16, y: 6)
-        }
+        modifier(FrostedGlass(shape: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)))
+            .shadow(color: .black.opacity(0.2), radius: 16, y: 6)
     }
 
-    /// Untinted regular glass, for a floating card over the page.
-    @ViewBuilder
+    /// Frosted card over the page.
     func liquidGlassCard(cornerRadius: CGFloat) -> some View {
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        if #available(iOS 26.0, *) {
-            self
-                .clipShape(shape)
-                .glassEffect(.regular, in: shape)
-        } else {
-            self
-                .background(.ultraThinMaterial, in: shape)
-                .clipShape(shape)
-                .overlay(
-                    shape.strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.6)
-                )
-        }
+        modifier(FrostedGlass(shape: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)))
     }
 }
 

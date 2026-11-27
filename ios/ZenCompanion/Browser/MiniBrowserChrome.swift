@@ -25,8 +25,9 @@ enum MiniBrowserChromeMetrics {
     /// rather than a strip across the screen.
     static let maxWidth: CGFloat = 560
 
-    /// Dock bottom to navigation bar top.
-    static var height: CGFloat { navBarHeight + rowSpacing + dockHeight }
+    /// The bar is one row, Safari-style: back/forward, the address pill and
+    /// the tabs button side by side.
+    static var height: CGFloat { navBarHeight }
 
     /// Screen bottom to navigation bar top, given the bar's bottom padding.
     static func height(above bottomPadding: CGFloat) -> CGFloat {
@@ -80,6 +81,8 @@ struct MiniBrowserChrome<NavBar: View>: View {
     /// Opens the browser's own history from the overview.
     var onOpenHistory: () -> Void = {}
     var onCloseAll: () -> Void = {}
+    /// Leaves the overview for the page it was opened from.
+    var onDone: () -> Void = {}
     /// The navigation bar. It stays in place while the menu grows above it.
     @ViewBuilder var navBar: () -> NavBar
 
@@ -150,24 +153,26 @@ struct MiniBrowserChrome<NavBar: View>: View {
                     ))
             }
 
-            navBar()
+            // One row, Safari-style. The bar stays mounted under the overview's
+            // row: a pull on it that opens the overview must not lose its gesture.
+            ZStack(alignment: .bottom) {
+                HStack(spacing: 8) {
+                    navBar()
+                    if !addressEditing {
+                        tabsButton
+                            .transition(.opacity)
+                    }
+                }
                 .opacity(overviewShown ? 0 : 1)
                 .allowsHitTesting(!overviewShown)
                 .accessibilityHidden(overviewShown)
 
-            if !addressEditing {
-                HStack(spacing: 10) {
-                    leadingControl
-                    Spacer(minLength: 0)
-                    // Closes the mini-browser.
-                    closeButton
-                    Spacer(minLength: 0)
-                    trailingControl
+                if !addressEditing {
+                    overviewRow
+                        .opacity(overviewShown ? 1 : 0)
+                        .allowsHitTesting(overviewShown)
+                        .accessibilityHidden(!overviewShown)
                 }
-                // Pulls the outer buttons inwards. The navigation bar above
-                // keeps its full width.
-                .padding(.horizontal, 7)
-                .transition(.opacity)
             }
         }
         // No `GlassEffectContainer` around the chrome on purpose. A container
@@ -257,100 +262,86 @@ struct MiniBrowserChrome<NavBar: View>: View {
         }
     }
 
-    /// The open pages, or the history once the overview is up. One piece of
-    /// glass: only what is printed on it changes.
-    private var leadingControl: some View {
-        let count = pages.pages.count
-        return ZStack {
-            Button(action: onOpenPages) {
-                PageCountBadge(count: count)
-                    .foregroundStyle(ink)
-                    .frame(width: controlSide, height: controlSide)
-                    .contentShape(Capsule())
-            }
-            .buttonStyle(GlassPressStyle())
-            .opacity(overviewShown ? 0 : 1)
-            .allowsHitTesting(!overviewShown)
-            .accessibilityHidden(overviewShown)
-            .accessibilityLabel(Text("browser.page_count \(count)"))
-
-            Button(action: onOpenHistory) {
-                Image(systemName: "clock.arrow.circlepath")
-                    .font(.system(size: glyphSize, weight: .semibold))
-                    .foregroundStyle(ink)
-                    .frame(width: controlSide, height: controlSide)
-                    .contentShape(Capsule())
-            }
-            .buttonStyle(GlassPressStyle())
-            .opacity(overviewShown ? 1 : 0)
-            .allowsHitTesting(overviewShown)
-            .accessibilityHidden(!overviewShown)
-            .accessibilityLabel(Text("history.title"))
-        }
-        .floatingGlassCapsule()
-    }
-
-    /// The page menu, or a new page once the overview is up. A long press on
-    /// the plus closes everything.
-    private var trailingControl: some View {
-        ZStack {
-            Button {
-                withAnimation(motion) { onToggleMenu() }
-            } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: glyphSize, weight: .semibold))
-                    .foregroundStyle(ink)
-                    .frame(width: controlSide, height: controlSide)
-                    .contentShape(Capsule())
-            }
-            .buttonStyle(GlassPressStyle())
-            .opacity(overviewShown ? 0 : 1)
-            .allowsHitTesting(!overviewShown)
-            .accessibilityHidden(overviewShown)
-            .accessibilityLabel(Text(menuOpen ? "browser.close_menu" : "browser.more"))
-
-            Menu {
-                Button(role: .destructive, action: onCloseAll) {
-                    Label {
-                        Text("kept.close_all")
-                    } icon: {
-                        Image(systemName: "xmark")
-                    }
-                }
-                .disabled(pages.pages.isEmpty)
-            } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: glyphSize, weight: .semibold))
-                    .foregroundStyle(ink)
-                    .frame(width: controlSide, height: controlSide)
-                    .contentShape(Capsule())
-            } primaryAction: {
-                onNewPage()
-            }
-            .opacity(overviewShown ? 1 : 0)
-            .allowsHitTesting(overviewShown)
-            .accessibilityHidden(!overviewShown)
-            .accessibilityLabel(Text("kept.new_page"))
-        }
-        .floatingGlassCapsule()
-    }
-
-    /// Smaller than the side buttons, as the middle control of the row. Shows
-    /// the synced sidebar: the browser is the app's main screen, so there is
-    /// nothing to close.
-    private var closeButton: some View {
-        Button(action: onClose) {
-            Image(systemName: "sidebar.left")
-                .font(.system(size: overviewShown ? 17 : 16, weight: .semibold))
-                .foregroundStyle(ink)
-                .frame(width: overviewShown ? 100 : 92, height: overviewShown ? 46 : 42)
-                .contentShape(Capsule())
+    /// The bar's right end: the open pages, as Safari's two squares.
+    private var tabsButton: some View {
+        Button(action: onOpenPages) {
+            Image(systemName: "square.on.square")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(ink.opacity(0.85))
+                .frame(width: MiniBrowserChromeMetrics.navBarHeight, height: MiniBrowserChromeMetrics.navBarHeight)
+                .contentShape(Circle())
                 // Inside the label on purpose: the pressed state has to move
-                // the whole pill, not only the glyph on it.
+                // the whole button, not only the glyph on it.
                 .floatingGlassCapsule()
         }
         .buttonStyle(GlassPressStyle())
-        .accessibilityLabel(Text(verbatim: "Sidebar"))
+        .accessibilityLabel(Text("browser.page_count \(pages.pages.count)"))
+    }
+
+    /// The overview's row: the sidebar and Raindrop on the left, a new page
+    /// and Done on the right. The sidebar is only reachable from here.
+    private var overviewRow: some View {
+        HStack(spacing: 10) {
+            overviewCircle(systemName: "sidebar.left", label: "Sidebar", action: onClose)
+            // Raindrop bookmarks: wired up with the Raindrop milestone.
+            overviewCircle(systemName: "cloud", label: "Raindrop bookmarks", enabled: false) {}
+            Spacer(minLength: 0)
+            newPageButton
+            Button(action: onDone) {
+                Text("common.done")
+                    .zenFont(16, weight: .semibold, design: .rounded)
+                    .foregroundStyle(ink)
+                    .padding(.horizontal, 20)
+                    .frame(height: controlSide)
+                    .contentShape(Capsule())
+                    .floatingGlassCapsule()
+            }
+            .buttonStyle(GlassPressStyle())
+        }
+        .padding(.horizontal, 4)
+    }
+
+    private func overviewCircle(
+        systemName: String,
+        label: String,
+        enabled: Bool = true,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: glyphSize, weight: .semibold))
+                .foregroundStyle(ink.opacity(enabled ? 1 : 0.35))
+                .frame(width: controlSide, height: controlSide)
+                .contentShape(Circle())
+                .floatingGlassCapsule()
+        }
+        .buttonStyle(GlassPressStyle())
+        .disabled(!enabled)
+        .accessibilityLabel(Text(verbatim: label))
+    }
+
+    /// A new page. A long press closes everything.
+    private var newPageButton: some View {
+        Menu {
+            Button(role: .destructive, action: onCloseAll) {
+                Label {
+                    Text("kept.close_all")
+                } icon: {
+                    Image(systemName: "xmark")
+                }
+            }
+            .disabled(pages.pages.isEmpty)
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: glyphSize, weight: .semibold))
+                .foregroundStyle(ink)
+                .frame(width: controlSide, height: controlSide)
+                .contentShape(Circle())
+        } primaryAction: {
+            onNewPage()
+        }
+        .floatingGlassCapsule()
+        .accessibilityLabel(Text("kept.new_page"))
     }
 
     // MARK: - Expanded menu
@@ -447,6 +438,8 @@ struct MiniBrowserChrome<NavBar: View>: View {
                 desktopRow
                 rowDivider
                 zoomRow
+                rowDivider
+                historyRow
             }
             .padding(.horizontal, 14)
             .liftCard(scheme)
@@ -664,6 +657,28 @@ struct MiniBrowserChrome<NavBar: View>: View {
         }
         .buttonStyle(CardPressStyle())
         .disabled(model.effectiveURL == nil)
+    }
+
+    /// The browser's own history. It used to sit on the overview's left button.
+    private var historyRow: some View {
+        Button {
+            withAnimation(motion) { model.collapseMenu() }
+            onOpenHistory()
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.system(size: 16, weight: .semibold))
+                    .frame(width: 24)
+                    .foregroundStyle(Color.primary)
+                Text("history.title")
+                    .zenFont(16, weight: .medium, design: .rounded)
+                    .foregroundStyle(Color.primary)
+                Spacer(minLength: 0)
+            }
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(CardPressStyle())
     }
 
     /// Lifts the article out of the page. Same shape as the other rows.
@@ -1028,6 +1043,8 @@ struct MiniBrowserTopBar: View {
     var onPullStart: () -> Void = {}
     var onPullChange: (CGSize) -> Void = { _ in }
     var onPullEnd: (PagePullEnd) -> Void = { _ in }
+    /// The page menu, from the ☰ at the pill's start.
+    var onToggleMenu: () -> Void = {}
 
     @Environment(\.colorScheme) private var scheme
     @Environment(\.browserInk) private var inkOverride
@@ -1059,8 +1076,38 @@ struct MiniBrowserTopBar: View {
                 closeCircle
             }
         } else {
-            navigationRow
-                .padding(.horizontal, 8)
+            HStack(spacing: 8) {
+                backForward
+                addressPill
+            }
+        }
+    }
+
+    /// Back, and forward only once there is a page to go forward to.
+    private var backForward: some View {
+        HStack(spacing: 0) {
+            iconButton(
+                systemName: "chevron.backward",
+                label: "browser.back",
+                enabled: model.canGoBack || page?.openerID != nil
+            ) {
+                if model.canGoBack { model.goBack() } else { onReturnToOpener() }
+            }
+            if model.canGoForward {
+                iconButton(systemName: "chevron.forward", label: "browser.forward", enabled: true) {
+                    model.goForward()
+                }
+                .transition(.opacity.combined(with: .scale(scale: 0.6)))
+            }
+        }
+        .frame(height: barHeight)
+        .floatingGlassCapsule()
+        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: model.canGoForward)
+    }
+
+    private var addressPill: some View {
+        navigationRow
+                .padding(.horizontal, 4)
                 .frame(height: barHeight)
                 .background {
                     LoadingFill(
@@ -1089,7 +1136,6 @@ struct MiniBrowserTopBar: View {
                     swiping = false
                     onSwipeEnd(PageSwipeEnd(target: .stay, direction: swipeOffset < 0 ? -1 : 1, velocity: 0))
                 }
-        }
     }
 
     // MARK: - Swipe between pages
@@ -1140,44 +1186,43 @@ struct MiniBrowserTopBar: View {
     /// The whole bar of the page coming in, drawn exactly like the real one:
     /// when the swipe ends, the real bar takes over without a visible change.
     private func peekBar(_ page: OpenPage) -> some View {
-        let peek = page.model
-        return HStack(spacing: 6) {
-            peekGlyph("chevron.backward", enabled: peek.canGoBack || page.openerID != nil)
-            peekGlyph("chevron.forward", enabled: peek.canGoForward)
-            HStack(spacing: 8) {
-                Group {
-                    if let url = page.url, url.scheme == "http" || url.scheme == "https" {
-                        Favicon(urlString: url.absoluteString, size: 16)
-                    } else {
-                        Image(systemName: "magnifyingglass")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(ink.opacity(0.55))
-                    }
-                }
-                .frame(width: 22, height: 22)
-                Text(page.url == nil ? String(localized: "browser.search_placeholder") : page.title)
-                    .zenFont(16, weight: .semibold, design: .rounded)
-                    .foregroundStyle(ink)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                Spacer(minLength: 0)
-            }
+        return HStack(spacing: 0) {
+            peekGlyph("line.3.horizontal", enabled: true)
+            peekGlyph("arrow.up.left.and.arrow.down.right", enabled: false)
+            Text(Self.domain(of: page.url))
+                .zenFont(15, weight: .semibold, design: .rounded)
+                .foregroundStyle(ink)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity)
+            peekGlyph("cloud", enabled: false)
             peekGlyph("arrow.clockwise", enabled: true)
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, 4)
         .frame(width: barWidth, height: barHeight)
         .floatingGlassCapsule()
         .allowsHitTesting(false)
     }
 
+    /// The same slot the real pill's glyphs take, so the bar that slides in
+    /// matches the one it replaces.
     private func peekGlyph(_ systemName: String, enabled: Bool) -> some View {
         Image(systemName: systemName)
-            .font(.system(size: 18, weight: .semibold))
+            .font(.system(size: Self.pillGlyphSize, weight: .semibold))
             .foregroundStyle(ink.opacity(enabled ? 0.85 : 0.3))
-            .frame(width: 32, height: barHeight - 8)
-            // The same 44pt slot the real bar's glyphs take, so the bar that
-            // slides in matches the one it replaces.
-            .frame(minWidth: 44, minHeight: 44)
+            .frame(width: Self.pillSlot, height: barHeight)
+    }
+
+    /// Tight slots, so the domain keeps as much of the pill as it can.
+    private static let pillSlot: CGFloat = 34
+    private static let pillGlyphSize: CGFloat = 16
+
+    /// What the pill prints: the site's domain, as Safari does.
+    static func domain(of url: URL?) -> String {
+        guard let url, let host = url.host(), !host.isEmpty else {
+            return String(localized: "browser.search_placeholder")
+        }
+        return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
     }
 
     private var swipeGesture: some Gesture {
@@ -1254,32 +1299,36 @@ struct MiniBrowserTopBar: View {
             }
     }
 
+    /// The pill: ☰ menu, ⤢ fullscreen, the domain, ☁ Raindrop, reload.
     private var navigationRow: some View {
-        HStack(spacing: 6) {
-            iconButton(
-                systemName: "chevron.backward",
-                label: "browser.back",
-                enabled: model.canGoBack || page?.openerID != nil
+        HStack(spacing: 0) {
+            pillButton(
+                systemName: "line.3.horizontal",
+                label: model.menuExpanded ? "browser.close_menu" : "browser.more"
             ) {
-                if model.canGoBack { model.goBack() } else { onReturnToOpener() }
+                withAnimation(.spring(response: 0.24, dampingFraction: 0.82)) { onToggleMenu() }
             }
-            iconButton(systemName: "chevron.forward", label: "browser.forward", enabled: model.canGoForward) {
-                model.goForward()
-            }
+            // Fullscreen: wired up with the polish milestone.
+            pillButton(systemName: "arrow.up.left.and.arrow.down.right", verbatimLabel: "Fullscreen", enabled: false) {}
 
             Button {
                 guard !swiping, !pulling else { return }
                 onBeginAddressEdit()
             } label: {
-                HStack(spacing: 8) {
-                    siteIcon
-                    Text(displayTitle)
-                        .zenFont(16, weight: .semibold, design: .rounded)
+                HStack(spacing: 4) {
+                    if model.effectiveURL?.scheme?.lowercased() == "http", model.pageError == nil {
+                        // An unencrypted page must not look like a trusted one.
+                        Image(systemName: "lock.open")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(ink.opacity(0.85))
+                    }
+                    Text(Self.domain(of: model.effectiveURL))
+                        .zenFont(15, weight: .semibold, design: .rounded)
                         .foregroundStyle(ink)
                         .lineLimit(1)
-                        .truncationMode(.tail)
-                    Spacer(minLength: 0)
+                        .truncationMode(.middle)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
             }
             // The icon is the only sign of an encrypted page, so VoiceOver
@@ -1292,14 +1341,35 @@ struct MiniBrowserTopBar: View {
                 Text(displayTitle.isEmpty ? String(localized: "browser.search_placeholder") : displayTitle)
             )
 
-            iconButton(
+            // Raindrop quick bookmark: wired up with the Raindrop milestone.
+            pillButton(systemName: "cloud", verbatimLabel: "Bookmark to Raindrop", enabled: false) {}
+
+            pillButton(
                 systemName: model.isLoading ? "xmark" : "arrow.clockwise",
-                label: model.isLoading ? "browser.stop" : "browser.reload",
-                enabled: true
+                label: model.isLoading ? "browser.stop" : "browser.reload"
             ) {
                 if model.isLoading { model.stopLoading() } else { model.reload() }
             }
         }
+    }
+
+    private func pillButton(
+        systemName: String,
+        label: LocalizedStringKey? = nil,
+        verbatimLabel: String? = nil,
+        enabled: Bool = true,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: Self.pillGlyphSize, weight: .semibold))
+                .foregroundStyle(ink.opacity(enabled ? 0.85 : 0.3))
+                .frame(width: Self.pillSlot, height: barHeight)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(GlyphPressStyle())
+        .disabled(!enabled)
+        .accessibilityLabel(label.map { Text($0) } ?? Text(verbatim: verbatimLabel ?? ""))
     }
 
     private var displayTitle: String {

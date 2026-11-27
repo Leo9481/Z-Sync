@@ -132,9 +132,7 @@ struct MiniBrowserView: View {
     /// down first.
     private var chromeBottomInset: CGFloat {
         guard addressEditing else { return chromeBottomPadding }
-        let aboveDock = chromeBottomPadding + MiniBrowserChromeMetrics.dockHeight
-            + MiniBrowserChromeMetrics.rowSpacing
-        return max(aboveDock, keyboardOverlap + 10)
+        return max(chromeBottomPadding, keyboardOverlap + 10)
     }
 
     /// Air between the controls and the physical bottom. The home indicator
@@ -233,6 +231,9 @@ struct MiniBrowserView: View {
                 onNewPage: openNewPage,
                 onOpenHistory: openHistory,
                 onCloseAll: { confirmCloseAll = true },
+                onDone: {
+                    if let page = pages.active { closeOverview(to: page) } else { openNewPage() }
+                },
                 navBar: {
                     MiniBrowserTopBar(
                         model: model,
@@ -250,7 +251,8 @@ struct MiniBrowserView: View {
                         onSwipeEnd: finishSwipe,
                         onPullStart: beginPagePull,
                         onPullChange: updatePagePull,
-                        onPullEnd: endPagePull
+                        onPullEnd: endPagePull,
+                        onToggleMenu: { model.toggleMenu() }
                     )
                 }
             )
@@ -372,23 +374,11 @@ struct MiniBrowserView: View {
                         .zIndex(1)
                 }
 
-                // The page runs out into a soft blur at the bottom instead of
-                // stopping against the controls.
-                PageBottomFade()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                    // Back before the card has finished growing, so the page
-                    // does not change at the bottom when the card goes.
-                    .opacity(chromeHidden || (showOverview && expandingCardID == nil) ? 0 : 1)
-                    .animation(barMotion, value: barCollapsed)
-                    .animation(.easeOut(duration: 0.12), value: showOverview)
-                    .animation(.easeOut(duration: 0.3), value: expandingCardID)
-                    .zIndex(4)
-
                 if let notice = model.pinNotice {
                     pinNoticeToast(notice)
                         .frame(maxWidth: MiniBrowserChromeMetrics.maxWidth)
                         .padding(.horizontal, 20)
-                        .padding(.bottom, 132)
+                        .padding(.bottom, 84)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                         .environment(\.colorScheme, barScheme)
                         .zIndex(5)
@@ -398,7 +388,7 @@ struct MiniBrowserView: View {
                     downloadCapsule(capsule)
                         .frame(maxWidth: MiniBrowserChromeMetrics.maxWidth)
                         .padding(.horizontal, 20)
-                        .padding(.bottom, model.pinNotice == nil ? 132 : 196)
+                        .padding(.bottom, model.pinNotice == nil ? 84 : 148)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                         .environment(\.colorScheme, barScheme)
                         .zIndex(5)
