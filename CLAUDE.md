@@ -67,16 +67,22 @@ Known ceiling: WebKit does not let apps cancel arbitrary network requests, so th
 - Collections map to folders. Provide a bookmarks view, the quick-save button, and add/remove support.
 - Leo will create the Raindrop developer app and provide the keys. Never commit secrets. Use CI secrets and local config.
 
+### 7. Page translator and dark mode (must-haves, added 2026-11-27)
+Both live in the page menu (the ☰ button in the address pill).
+- **Translate page:** use Apple's on-device Translation framework (private, free, no API key). Collect the page's text nodes with an injected script, translate them in batches with `TranslationSession`, and write them back in place. Offer "Show original" to undo. The framework's programmatic API needs iOS 18, so on iOS 17 hide the item. **(Verify the current API before coding.)**
+- **Dark mode for websites:** one global toggle in the menu, applied to every page. Use Dark Reader's dynamic theme engine (MIT license), injected as a `WKUserScript`, so pages that are already dark stay as they are. Allow turning it off for one site. **(Verify the license and the current release.)**
+
 ## Suggested order of work
 
 1. Get the fork building: unsigned-IPA workflow in GitHub Actions, and confirm it installs on Leo's phone.
 2. Browser shell: `WKWebView`, address and search bar, minimal UI, and opening sidebar tabs locally.
-3. Tab manager: grid, thumbnails, persistence, "Private | Tabs" pill.
-4. Send to desktop.
-5. Popup and redirect blocking.
-6. Raindrop.io integration and quick-bookmark button.
-7. Filter lists, then cosmetic filters and scriptlets, then auto-updates.
-8. Frosted-glass polish and fullscreen button, tuned on the real phone.
+3. Page menu tools: translator and dark mode for websites.
+4. Tab manager: grid, thumbnails, persistence, "Private | Tabs" pill.
+5. Send to desktop.
+6. Popup and redirect blocking.
+7. Raindrop.io integration and quick-bookmark button.
+8. Filter lists, then cosmetic filters and scriptlets, then auto-updates.
+9. Frosted-glass polish and fullscreen button, tuned on the real phone.
 
 ## Open questions to answer by reading the code first
 

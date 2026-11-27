@@ -429,7 +429,7 @@ struct SpacesBrowserView: View {
             // One beat, so the cover is not presented mid-appearance.
             try? await Task.sleep(for: .milliseconds(50))
             guard browserSession == nil, browserWaitingForBlocker == nil, incomingLink == nil else { return }
-            resumeBrowser()
+            resumeBrowser(animated: false)
         }
         .task {
             // Show release notes once per app version, after the first frame
@@ -618,10 +618,10 @@ struct SpacesBrowserView: View {
 
     /// Brings the browser back as it was left: its page used last, or a new
     /// blank page when none is open.
-    private func resumeBrowser() {
+    private func resumeBrowser(animated: Bool = true) {
         prepareOpenPages()
         openPages.resumeOrOpenBlank()
-        show(BrowserTabSession(space: model.activeSpace))
+        show(BrowserTabSession(space: model.activeSpace), animated: animated)
     }
 
     private func openNewTab(in space: ZenSpace) {
@@ -647,9 +647,15 @@ struct SpacesBrowserView: View {
 
     /// The first browser waits for the content-blocking question; every
     /// later one opens at once.
-    private func show(_ session: BrowserTabSession) {
+    private func show(_ session: BrowserTabSession, animated: Bool = true) {
         if ContentBlocker.shared.asked {
-            presentCover { browserSession = session }
+            presentCover {
+                // At launch the browser is the app's main screen: it should
+                // just be there, not slide up over the sidebar.
+                var transaction = Transaction()
+                transaction.disablesAnimations = !animated
+                withTransaction(transaction) { browserSession = session }
+            }
         } else {
             browserWaitingForBlocker = session
             presentCover { isAskingBlocker = true }
