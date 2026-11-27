@@ -41,6 +41,10 @@ The current Z-Sync sidebar screen stays as a **1:1 real-time mirror of the deskt
 - Each card has a close button at the top right and a **"send to desktop" button at the bottom left**, with a short confirmation (checkmark) after sending.
 - Memory: use the efficient, standard approach. Keep a few live web views (`OpenPagesStore.liveLimit`), and let the rest sleep with their snapshot and history and wake on demand. Persist tabs so they survive restarts. Tabs do not expire by default.
 - Mobile tabs are **separate from desktop tabs**. Nothing syncs automatically from mobile to desktop.
+- **Private section (Leo, 2026-11-27):** private tabs become their own section, like Safari's `[Private | N Tabs]` pill in the overview, instead of a single page made private from a blank tab. Switching the pill switches between two separate decks. + opens a new tab in whichever section is showing.
+  - Every private tab behaves as incognito: its own non-persistent `WKWebsiteDataStore`, no history entries, no saved cookies, cache or site data, and no thumbnails written to disk.
+  - **Setting: "Lock private tabs"** (off by default). It asks for Face ID / Touch ID or the device passcode (`LAContext`, `.deviceOwnerAuthentication`) **every time** the private section is opened. No grace period. While locked or in the app switcher, the private section shows a blurred cover, never page content.
+  - **Setting: "Keep private tabs"** (off by default). Off: all private tabs close when you switch back to normal tabs or the app is closed. On: the list of private tabs (address and title only) stays in the private section. All their browsing data is still wiped: each kept tab reloads fresh, signed out, with no cookies or history. The kept list is stored encrypted with iOS Data Protection (`completeUnlessOpen` or stricter) and never in the App Group or iCloud backups.
 
 ### 3. Sidebar view
 - A separate button opens the existing sidebar screen above.
@@ -84,12 +88,18 @@ Both live in the page menu (the ☰ button in the address pill).
 - **Server check (Leo, 2026-11-27):** each config is tied to one Proton server. WireGuard has no "is the server up" ping, so the check is: bring up the tunnel, wait for a handshake, then load a small test URL through it, with a short timeout. Run it when the toggle is switched on, when the app returns to the front, and when page loads start failing through the tunnel.
 - **Fallback cascade:** Leo can import a few configs in a priority order he sets. If the check fails on config 1, try config 2, then 3, and so on. Show which server is in use. **If every config fails (Leo, 2026-11-27):** show a popup that says no VPN server answered, and turn the feature off automatically, so browsing goes on over the normal connection. Leo turns it back on himself. Periodically retry the preferred config so it switches back once that server is up again.
 
+### 9. Performance pass (Leo, 2026-11-27)
+- Leo finds some animations laggy, mostly the tab ones: the page flying into the overview, the overview deck, and swiping between tabs. Do a proper, measured optimization rather than guesswork.
+- Approach: profile with Instruments (SwiftUI and Time Profiler templates, Animation Hitches) on a CI-built, development-signed run where possible. Otherwise add `os_signpost` intervals around the transitions and log hitch timings in a debug setting Leo can read. Usual suspects: snapshot captures on the main thread during a transition, SwiftUI view bodies re-running for every card each frame, shadows and blur materials without `compositingGroup`/`drawingGroup`, oversized thumbnails, and waking sleeping web views mid-animation.
+- Target: a steady 120 Hz on ProMotion phones for the tab transitions, with Leo's real tab count (30+).
+
 ## Suggested order of work
 
 1. Get the fork building: unsigned-IPA workflow in GitHub Actions, and confirm it installs on Leo's phone.
 2. Browser shell: `WKWebView`, address and search bar, minimal UI, and opening sidebar tabs locally.
 3. Page menu tools: translator and dark mode for websites.
-4. Tab manager: grid, thumbnails, persistence, "Private | Tabs" pill.
+4. Tab manager: grid, thumbnails, persistence, "Private | Tabs" pill with the private section, its lock and its keep setting.
+4b. Performance pass on the tab animations, right after the tab manager lands.
 5. Send to desktop.
 6. Popup and redirect blocking.
 7. Raindrop.io integration and quick-bookmark button.
