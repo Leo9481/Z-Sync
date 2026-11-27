@@ -624,7 +624,8 @@ struct SpacesBrowserView: View {
     }
 
     private var openPages: OpenPagesStore { .shared }
-    private var pageCount: Int { openPages.pages.count }
+    /// The normal tabs: the sidebar never counts or opens private ones.
+    private var pageCount: Int { openPages.normalPageCount }
 
     /// Brings the shared page store in line with this session before it opens
     /// a browser: normal saves follow the synced capability, and saving at all
@@ -632,6 +633,8 @@ struct SpacesBrowserView: View {
     private func prepareOpenPages() {
         openPages.allowsNormalTabs = model.snapshot.normalTabsCapability.allowsNormalTabs
         openPages.canSave = isSignedIn
+        // Links and tabs from the sidebar or another app open as normal tabs.
+        openPages.showSection(private: false)
     }
 
     private func openTab(_ tab: ZenTab, in space: ZenSpace) {

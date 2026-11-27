@@ -20,6 +20,9 @@ enum MiniBrowserChromeMetrics {
     static let overviewDockHeight: CGFloat = 48
     /// How much further up the dock sits over the overview.
     static let overviewDockLift: CGFloat = 16
+    /// The Private | Tabs switch above the overview's buttons.
+    static let overviewSectionHeight: CGFloat = 44
+    static let overviewSectionSpacing: CGFloat = 10
     /// The widest the chrome gets. Wider than any iPhone, narrower than the
     /// open iPhone Duo held upright, so on iPad and the Duo it stays a bar
     /// rather than a strip across the screen.
@@ -85,6 +88,8 @@ struct MiniBrowserChrome<NavBar: View>: View {
     var onDone: () -> Void = {}
     /// The app's settings, the same sheet as the sidebar's gear.
     var onOpenSettings: () -> Void = {}
+    /// The Private | Tabs switch: true for the private section.
+    var onSwitchSection: (Bool) -> Void = { _ in }
     /// The navigation bar. It stays in place while the menu grows above it.
     @ViewBuilder var navBar: () -> NavBar
 
@@ -280,9 +285,51 @@ struct MiniBrowserChrome<NavBar: View>: View {
         .accessibilityLabel(Text("browser.page_count \(pages.pages.count)"))
     }
 
-    /// The overview's row: the sidebar and Raindrop on the left, a new page
-    /// and Done on the right. The sidebar is only reachable from here.
+    /// The overview's controls: the Private | Tabs switch, and under it the
+    /// sidebar, settings and Raindrop on the left, a new page and Done on the
+    /// right. The sidebar is only reachable from here.
     private var overviewRow: some View {
+        VStack(spacing: MiniBrowserChromeMetrics.overviewSectionSpacing) {
+            sectionSwitch
+            overviewButtons
+        }
+    }
+
+    /// Safari's [Private | N Tabs]. The selected side sits on a lighter pill.
+    private var sectionSwitch: some View {
+        HStack(spacing: 2) {
+            sectionSide(title: "Private", selected: pages.showsPrivate) { onSwitchSection(true) }
+            sectionSide(
+                title: pages.normalPageCount == 1 ? "1 Tab" : "\(pages.normalPageCount) Tabs",
+                selected: !pages.showsPrivate
+            ) { onSwitchSection(false) }
+        }
+        .padding(3)
+        .floatingGlassCapsule()
+        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: pages.showsPrivate)
+    }
+
+    private func sectionSide(title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(verbatim: title)
+                .zenFont(15, weight: .semibold, design: .rounded)
+                .foregroundStyle(ink.opacity(selected ? 1 : 0.5))
+                .lineLimit(1)
+                .padding(.horizontal, 18)
+                .frame(height: MiniBrowserChromeMetrics.overviewSectionHeight - 6)
+                .background {
+                    if selected {
+                        Capsule(style: .continuous)
+                            .fill(ink.opacity(0.13))
+                    }
+                }
+                .contentShape(Capsule())
+        }
+        .buttonStyle(GlassPressStyle())
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    private var overviewButtons: some View {
         HStack(spacing: 10) {
             overviewCircle(systemName: "sidebar.left", label: "Sidebar", action: onClose)
             overviewCircle(systemName: "gearshape", label: "Settings", action: onOpenSettings)
@@ -742,7 +789,7 @@ struct MiniBrowserChrome<NavBar: View>: View {
                     get: { WebsiteDarkMode.isEnabled },
                     set: { on in
                         WebsiteDarkMode.isEnabled = on
-                        for page in pages.pages { page.model.applyWebsiteDarkMode() }
+                        for page in pages.allPages { page.model.applyWebsiteDarkMode() }
                         model.darkModeGeneration += 1
                     }
                 )
@@ -1566,12 +1613,10 @@ struct MiniBrowserTopBar: View {
                 onSubmit: onSubmit,
                 onFocusChange: { focused in isAddressFocused = focused }
             )
+            // Private tabs have their own section in the overview now, so a
+            // new page no longer offers to turn private here.
             if !model.addressText.isEmpty {
                 clearButton
-            } else if model.opensWithSearch, page != nil {
-                // Nothing typed into a new page yet: the slot of the clear
-                // button chooses whether the page opens private.
-                incognitoButton
             }
         }
         .padding(.leading, 16)

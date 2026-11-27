@@ -57,6 +57,8 @@
 	</dict>
 	<key>NSCameraUsageDescription</key>
 	<string>Websites you allow in the browser can use your camera.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Z-Browser uses Face ID to unlock your private tabs.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Z-Browser loads the icon of a synced tab from the tab's own address, which may be a device on your local network.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>

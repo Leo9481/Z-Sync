@@ -26,6 +26,8 @@ struct MiniBrowserView: View {
 
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var privateTabs = PrivateTabsSettings.shared
     /// Stands in for the frame between the last page going and the cover closing.
     @State private var placeholder = MiniBrowserModel(initialURL: nil)
     /// The native address field owns the real first responder; this mirrors it
@@ -236,9 +238,16 @@ struct MiniBrowserView: View {
                 onOpenHistory: openHistory,
                 onCloseAll: { confirmCloseAll = true },
                 onDone: {
-                    if let page = pages.active { closeOverview(to: page) } else { openNewPage() }
+                    // After a switch of section no page is on screen yet:
+                    // the one used last in this section comes back.
+                    if let page = pages.active ?? pages.recencyOrder.last {
+                        closeOverview(to: page)
+                    } else {
+                        openNewPage()
+                    }
                 },
                 onOpenSettings: onOpenSettings,
+                onSwitchSection: switchSection(toPrivate:),
                 navBar: {
                     MiniBrowserTopBar(
                         model: model,
@@ -407,8 +416,24 @@ struct MiniBrowserView: View {
                     .environment(\.colorScheme, privateChrome ? .dark : scheme)
                     .environment(\.browserInk, privateChrome ? .white : nil)
                     .zIndex(6)
+
+                // The private section behind its lock, and out of the app
+                // switcher's picture while the lock is on.
+                if privateSectionCovered {
+                    PrivateTabsLockCover(
+                        onUnlock: { Task { _ = await privateTabs.unlock() } },
+                        onLeave: { switchSection(toPrivate: false) }
+                    )
+                    .transition(.opacity)
+                    .zIndex(10)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            .animation(.easeOut(duration: 0.2), value: privateSectionCovered)
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .background { privateTabs.lock() }
+                askToUnlockIfNeeded()
+            }
             .background {
                 ZStack {
                     sheetBackground
@@ -545,6 +570,7 @@ struct MiniBrowserView: View {
             aheadReveal: aheadReveal,
             topInset: pageFrame.minY,
             bottomClearance: MiniBrowserChromeMetrics.overviewDockHeight + MiniBrowserChromeMetrics.overviewDockLift
+                + MiniBrowserChromeMetrics.overviewSectionHeight + MiniBrowserChromeMetrics.overviewSectionSpacing
                 + chromeBottomPadding + 10,
             onOpen: closeOverview(to:)
         )
@@ -717,6 +743,53 @@ struct MiniBrowserView: View {
 }
 
 private extension MiniBrowserView {
+    // MARK: Private section
+
+    /// The lock cover is up: the private section with the lock on, while it
+    /// is locked or the app is not in front (the app switcher's picture).
+    var privateSectionCovered: Bool {
+        pages.showsPrivate && privateTabs.lockEnabled
+            && (!privateTabs.isUnlocked || scenePhase != .active)
+    }
+
+    /// Back in front with the private section locked: Face ID asks once by
+    /// itself. After a cancel, the cover's Unlock button asks again.
+    func askToUnlockIfNeeded() {
+        guard scenePhase == .active, pages.showsPrivate, privateTabs.lockEnabled,
+              !privateTabs.isUnlocked, !privateTabs.askedSinceLocked else { return }
+        privateTabs.askedSinceLocked = true
+        Task { _ = await privateTabs.unlock() }
+    }
+
+    /// The Private | Tabs switch. Opening the private section with the lock
+    /// on asks for Face ID or the passcode first, every time.
+    func switchSection(toPrivate: Bool) {
+        guard toPrivate != pages.showsPrivate else { return }
+        guard toPrivate else {
+            privateTabs.lock()
+            applySectionSwitch(toPrivate: false)
+            return
+        }
+        Task { @MainActor in
+            guard await privateTabs.unlock() else { return }
+            applySectionSwitch(toPrivate: true)
+        }
+    }
+
+    func applySectionSwitch(toPrivate: Bool) {
+        if isAddressFocused { isAddressFocused = false }
+        editingAddress = false
+        startsInSearch = false
+        pages.showSection(private: toPrivate)
+        // A fresh deck, with the other section's cards.
+        deckGeneration += 1
+        if !showOverview {
+            showOverview = true
+            overviewControls = true
+            overviewReveal = 1
+        }
+    }
+
     /// Steps aside for the sidebar. Every page stays open (`OpenPagesStore.suspend`);
     /// the picture for the list is taken before the page leaves the screen.
     private func leaveBrowser() {

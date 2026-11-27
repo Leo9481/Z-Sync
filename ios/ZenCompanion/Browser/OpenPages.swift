@@ -164,20 +164,31 @@ final class OpenPagesStore: MiniBrowserPageHost {
     /// web content process.
     static let liveLimit = 4
 
-    /// Oldest first; new pages join at the end, or right after their opener.
-    private(set) var pages: [OpenPage] = []
+    /// Every page, normal and private. Oldest first; new pages join at the
+    /// end, or right after their opener.
+    private(set) var allPages: [OpenPage] = []
     /// The page on screen; nil while the browser is closed.
     private(set) var activeID: String?
+    /// The section the reader is in: private tabs, or normal tabs. The
+    /// overview, the tab count and the address bar swipe show only its pages.
+    private(set) var showsPrivate = false
+
+    /// The pages of the section on screen.
+    var pages: [OpenPage] {
+        allPages.filter { $0.model.isPrivate == showsPrivate }
+    }
+
+    var normalPageCount: Int { allPages.filter { !$0.model.isPrivate }.count }
 
     /// Whether this account can write normal tabs. Follows the synced browser.
     @ObservationIgnored var allowsNormalTabs = false {
-        didSet { pages.forEach { $0.model.allowsNormalTabs = allowsNormalTabs } }
+        didSet { allPages.forEach { $0.model.allowsNormalTabs = allowsNormalTabs } }
     }
 
     /// Whether saving into a space is offered. Follows the signed-in state:
     /// signed out, every page's pin control is off.
     @ObservationIgnored var canSave = true {
-        didSet { pages.forEach { $0.model.canSave = canSave } }
+        didSet { allPages.forEach { $0.model.canSave = canSave } }
     }
 
     @ObservationIgnored private let directory: URL
@@ -199,21 +210,22 @@ final class OpenPagesStore: MiniBrowserPageHost {
         self.preferences = preferences
         self.now = now
         self.makeModel = makeModel
-        pages = Self.read(from: directory).map { saved in
+        allPages = Self.read(from: directory).compactMap { saved in
+            let isPrivate = saved.isPrivate == true || saved.privateDataID != nil
+            // Private tabs come back only with "Keep private tabs" on.
+            if isPrivate, !UserDefaults.standard.bool(forKey: "privateTabs.keep") { return nil }
             let model = makeModel(saved.url)
             model.restore(title: saved.title)
-            // Written before each private page had a store of its own: a fresh one.
-            if let id = saved.privateDataID ?? (saved.isPrivate == true ? UUID() : nil) {
-                model.makePrivate(id)
-            }
+            // A kept private tab starts over with empty website data.
+            if isPrivate { model.makePrivate(UUID()) }
             model.markAddressAsVisited()
             let page = OpenPage(id: saved.id, model: model, keptAt: saved.keptAt, lastUsedAt: saved.lastUsedAt)
             model.host = self
             return page
         }
         closeExpired()
-        // Their sign-ins stay; what an earlier run left without a page goes.
-        PrivateBrowsing.startUp(keeping: privateDataIDs)
+        // On-disk private data from earlier builds goes.
+        PrivateBrowsing.startUp()
     }
 
     // MARK: - Reading
@@ -224,7 +236,37 @@ final class OpenPagesStore: MiniBrowserPageHost {
     }
 
     func page(_ id: String) -> OpenPage? {
-        pages.first { $0.id == id }
+        allPages.first { $0.id == id }
+    }
+
+    // MARK: - Sections
+
+    /// Goes to the private or the normal section. The page on screen leaves;
+    /// the overview shows the other section's pages. Going back to normal
+    /// tabs closes the private ones, unless "Keep private tabs" is on.
+    func showSection(private: Bool) {
+        guard showsPrivate != `private` else { return }
+        if let current = active { leaveScreen(current) }
+        activeID = nil
+        releaseSwitchingOrder()
+        showsPrivate = `private`
+        if !`private`, !PrivateTabsSettings.shared.keepTabs {
+            closePrivatePages()
+        }
+        persist()
+    }
+
+    /// Every private page goes, with all of its website data.
+    private func closePrivatePages() {
+        let gone = allPages.filter(\.model.isPrivate)
+        guard !gone.isEmpty else { return }
+        for page in gone {
+            page.model.commitPendingPinSave()
+            page.model.sleep()
+            removeFiles(of: page)
+        }
+        allPages.removeAll { $0.model.isPrivate }
+        discardPrivateData(of: gone)
     }
 
     /// Least recently used first, the page on screen last: the order of the
@@ -292,10 +334,12 @@ final class OpenPagesStore: MiniBrowserPageHost {
     // MARK: - Opening and switching
 
     /// Opens a new page and puts it on screen.
+    /// A new page in the private section is private, with data of its own.
     @discardableResult
     func open(url: URL?, title: String? = nil, openedFromSpace: Bool = false) -> OpenPage {
         let model = makeModel(url)
         if let title { model.restore(title: title) }
+        if showsPrivate { model.makePrivate(UUID()) }
         return insert(OpenPage(model: model, openedFromSpace: openedFromSpace, lastUsedAt: now()), after: nil)
     }
 
@@ -303,21 +347,23 @@ final class OpenPagesStore: MiniBrowserPageHost {
         page.model.host = self
         page.model.allowsNormalTabs = allowsNormalTabs
         page.model.canSave = canSave
-        if let opener, let index = pages.firstIndex(where: { $0.id == opener.id }) {
-            pages.insert(page, at: index + 1)
+        if let opener, let index = allPages.firstIndex(where: { $0.id == opener.id }) {
+            allPages.insert(page, at: index + 1)
         } else {
-            pages.append(page)
+            allPages.append(page)
         }
         activate(page.id)
         return page
     }
 
-    /// Puts a page on screen and leaves the one that was there.
+    /// Puts a page on screen and leaves the one that was there. The reader
+    /// is in the page's section from then on.
     func activate(_ id: String) {
         guard let page = page(id) else { return }
         if let current = active, current.id != id {
             leaveScreen(current)
         }
+        showsPrivate = page.model.isPrivate
         page.lastUsedAt = now()
         activeID = id
         wake(page)
@@ -358,7 +404,7 @@ final class OpenPagesStore: MiniBrowserPageHost {
 
     /// Keeps the most recently used pages live.
     private func trimLivePages(limit: Int = OpenPagesStore.liveLimit) {
-        let live = pages
+        let live = allPages
             .filter { $0.model.webView != nil && $0.id != activeID }
             .sorted { $0.lastUsedAt > $1.lastUsedAt }
         for page in live.dropFirst(max(0, limit - 1)) {
@@ -369,9 +415,9 @@ final class OpenPagesStore: MiniBrowserPageHost {
     /// Puts a page where another one is. The swipe follows the same order.
     func move(_ id: String, onto target: String) {
         guard id != target,
-              let from = pages.firstIndex(where: { $0.id == id }),
-              let to = pages.firstIndex(where: { $0.id == target }) else { return }
-        pages.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
+              let from = allPages.firstIndex(where: { $0.id == id }),
+              let to = allPages.firstIndex(where: { $0.id == target }) else { return }
+        allPages.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
         persist()
     }
 
@@ -381,20 +427,21 @@ final class OpenPagesStore: MiniBrowserPageHost {
     /// the one used last. Returns false when no page is left on screen.
     @discardableResult
     func close(_ id: String) -> Bool {
-        guard let index = pages.firstIndex(where: { $0.id == id }) else { return activeID != nil }
-        let page = pages[index]
+        guard let index = allPages.firstIndex(where: { $0.id == id }) else { return activeID != nil }
+        let page = allPages[index]
         let wasActive = activeID == id
         page.model.commitPendingPinSave()
         page.model.sleep()
-        pages.remove(at: index)
+        allPages.remove(at: index)
         removeFiles(of: page)
         discardPrivateData(of: [page])
-        for other in pages where other.openerID == id {
+        for other in allPages where other.openerID == id {
             other.openerID = page.openerID
         }
         if wasActive {
             activeID = nil
-            // The deck runs by recency: the page used last comes back.
+            // The deck runs by recency: the page used last in this section
+            // comes back.
             let next = page.openerID.flatMap(self.page) ?? pages.max { $0.lastUsedAt < $1.lastUsedAt }
             if let next {
                 activate(next.id)
@@ -404,24 +451,26 @@ final class OpenPagesStore: MiniBrowserPageHost {
         return activeID != nil
     }
 
-    /// Ends every page. The browser, if it was open, closes with them.
+    /// Ends every page of the section on screen.
     func closeAll() {
-        for page in pages {
+        let gone = pages
+        for page in gone {
             page.model.commitPendingPinSave()
             page.model.sleep()
+            removeFiles(of: page)
         }
-        let gone = pages
-        pages = []
+        let goneIDs = Set(gone.map(\.id))
+        allPages.removeAll { goneIDs.contains($0.id) }
         activeID = nil
         discardPrivateData(of: gone)
-        try? FileManager.default.removeItem(at: directory)
+        persist()
     }
 
     /// Pages that stay let go of their web views; the others go.
     func endBrowserSession() {
         let onScreen = activeID
         activeID = nil
-        for page in pages {
+        for page in allPages {
             page.model.commitPendingPinSave()
             page.model.didLeaveScreen()
             // Only what was in use: the others keep counting down.
@@ -434,11 +483,11 @@ final class OpenPagesStore: MiniBrowserPageHost {
             }
             putToSleep(page)
         }
-        let gone = pages.filter { !$0.isKept }
-        pages.removeAll { !$0.isKept }
+        let gone = allPages.filter { !$0.isKept }
+        allPages.removeAll { !$0.isKept }
         discardPrivateData(of: gone)
         // A page's way back ends with the page it led to.
-        for page in pages where page.openerID.flatMap(self.page) == nil {
+        for page in allPages where page.openerID.flatMap(self.page) == nil {
             page.openerID = nil
         }
         persist()
@@ -453,7 +502,7 @@ final class OpenPagesStore: MiniBrowserPageHost {
             active.model.didLeaveScreen()
             active.lastUsedAt = now()
         }
-        for page in pages {
+        for page in allPages {
             page.model.commitPendingPinSave()
             saveIfItStays(page)
             saveHistory(of: page)
@@ -476,7 +525,7 @@ final class OpenPagesStore: MiniBrowserPageHost {
     func closeExpired() {
         guard let interval = KeptPageLifetime.stored(in: preferences).interval else { return }
         let deadline = now().addingTimeInterval(-interval)
-        for page in pages where page.isKept && page.id != activeID && page.lastUsedAt <= deadline {
+        for page in allPages where page.isKept && page.id != activeID && page.lastUsedAt <= deadline {
             close(page.id)
         }
     }
@@ -513,7 +562,7 @@ final class OpenPagesStore: MiniBrowserPageHost {
     }
 
     private var privateDataIDs: Set<UUID> {
-        Set(pages.compactMap(\.model.privateDataID))
+        Set(allPages.compactMap(\.model.privateDataID))
     }
 
     /// Private pages that went take their website data with them, unless a
@@ -543,7 +592,7 @@ final class OpenPagesStore: MiniBrowserPageHost {
     // MARK: - Page reports
 
     func openPopup(from model: MiniBrowserModel, url: URL?, configuration: WKWebViewConfiguration) -> WKWebView? {
-        let opener = pages.first { $0.model === model }
+        let opener = allPages.first { $0.model === model }
         let popup = makeModel(url ?? URL(string: "about:blank"))
         popup.inheritPrivacy(from: model, sharingData: true)
         let webView = MiniBrowserWebDriver.attach(to: popup, configuration: configuration)
@@ -553,7 +602,7 @@ final class OpenPagesStore: MiniBrowserPageHost {
     }
 
     func openInNewPage(_ url: URL, from model: MiniBrowserModel) {
-        let opener = pages.first { $0.model === model }
+        let opener = allPages.first { $0.model === model }
         let newModel = makeModel(url)
         newModel.inheritPrivacy(from: model, sharingData: false)
         let page = OpenPage(model: newModel, openerID: opener?.id, lastUsedAt: now())
@@ -561,19 +610,19 @@ final class OpenPagesStore: MiniBrowserPageHost {
     }
 
     func pageRequestedClose(_ model: MiniBrowserModel) {
-        guard let page = pages.first(where: { $0.model === model }) else { return }
+        guard let page = allPages.first(where: { $0.model === model }) else { return }
         close(page.id)
     }
 
     func pageDidChange(_ model: MiniBrowserModel) {
-        guard pages.contains(where: { $0.model === model && $0.isKept }) else { return }
+        guard allPages.contains(where: { $0.model === model && $0.isKept }) else { return }
         persist()
     }
 
     /// A page that stays is saved as soon as it has loaded, not only when the
     /// browser closes: the app can end at any moment without saying so.
     func pageDidFinishLoading(_ model: MiniBrowserModel) {
-        guard let page = pages.first(where: { $0.model === model }) else { return }
+        guard let page = allPages.first(where: { $0.model === model }) else { return }
         saveIfItStays(page)
         saveHistory(of: page)
         guard page.id == activeID else { return }
@@ -581,7 +630,7 @@ final class OpenPagesStore: MiniBrowserPageHost {
     }
 
     func pageWasPinned(_ model: MiniBrowserModel, url: URL) {
-        guard let page = pages.first(where: { $0.model === model }), page.isKept else { return }
+        guard let page = allPages.first(where: { $0.model === model }), page.isKept else { return }
         // Still pinned? A page that moved on stays what it was.
         guard PageTitle.sameDocument(url, page.url) else { return }
         if page.id == activeID {
@@ -593,7 +642,7 @@ final class OpenPagesStore: MiniBrowserPageHost {
     }
 
     func pageProcessDidTerminate(_ model: MiniBrowserModel) -> Bool {
-        guard let page = pages.first(where: { $0.model === model }), page.id != activeID else { return false }
+        guard let page = allPages.first(where: { $0.model === model }), page.id != activeID else { return false }
         putToSleep(page)
         return true
     }
@@ -667,8 +716,9 @@ final class OpenPagesStore: MiniBrowserPageHost {
 
     private static let shotWidth = 240.0
 
+    /// A private page's picture stays in memory only.
     private func writeShot(_ image: UIImage, of page: OpenPage) {
-        guard let data = image.jpegData(compressionQuality: 0.72) else { return }
+        guard !page.model.isPrivate, let data = image.jpegData(compressionQuality: 0.72) else { return }
         ensureDirectory()
         // On the main actor, like the removal: a write still under way could
         // otherwise bring back the file of a page that just went. A failed
@@ -685,14 +735,15 @@ final class OpenPagesStore: MiniBrowserPageHost {
         writeHistory(history, of: page)
     }
 
+    /// A private page's history never goes to disk.
     private func writeHistory(_ history: Any, of page: OpenPage) {
-        guard page.isKept, let data = history as? Data else { return }
+        guard page.isKept, !page.model.isPrivate, let data = history as? Data else { return }
         ensureDirectory()
-        try? data.write(to: fileURL(page.id, "state"), options: .atomic)
+        try? data.write(to: fileURL(page.id, "state"), options: [.atomic, .completeFileProtectionUnlessOpen])
     }
 
     private func storedHistory(of page: OpenPage) -> Any? {
-        guard page.isKept else { return nil }
+        guard page.isKept, !page.model.isPrivate else { return nil }
         return try? Data(contentsOf: fileURL(page.id, "state"))
     }
 
@@ -718,7 +769,7 @@ final class OpenPagesStore: MiniBrowserPageHost {
 
     /// The app may not come back, so what would stay on close is saved now.
     private func didEnterBackground() {
-        for page in pages {
+        for page in allPages {
             saveIfItStays(page)
             if page.id == activeID { page.lastUsedAt = now() }
             saveHistory(of: page)
@@ -747,18 +798,34 @@ final class OpenPagesStore: MiniBrowserPageHost {
         try? target.setResourceValues(values)
     }
 
+    /// Normal pages are written when they stay. Private pages only with
+    /// "Keep private tabs" on, and then only their address and title: no
+    /// website data, no picture, no history. The file is encrypted while the
+    /// phone is locked and stays out of backups.
     private func persist() {
-        let saved = pages.compactMap { page -> SavedPage? in
-            guard let keptAt = page.keptAt, let url = page.url else { return nil }
+        let keepPrivate = PrivateTabsSettings.shared.keepTabs
+        let saved = allPages.compactMap { page -> SavedPage? in
+            guard let url = page.url else { return nil }
+            if page.model.isPrivate {
+                guard keepPrivate, Self.isWebAddress(url) else { return nil }
+                return SavedPage(
+                    id: page.id, url: url, title: page.model.pageTitle, keptAt: page.keptAt ?? page.lastUsedAt,
+                    lastUsedAt: page.lastUsedAt, privateDataID: nil, isPrivate: true
+                )
+            }
+            guard let keptAt = page.keptAt else { return nil }
             return SavedPage(
                 id: page.id, url: url, title: page.model.pageTitle, keptAt: keptAt,
-                lastUsedAt: page.lastUsedAt, privateDataID: page.model.privateDataID, isPrivate: nil
+                lastUsedAt: page.lastUsedAt, privateDataID: nil, isPrivate: nil
             )
         }
         ensureDirectory()
         guard let data = try? JSONEncoder().encode(saved) else { return }
         // The list in memory still holds; the next write tries again.
-        try? data.write(to: directory.appendingPathComponent(Self.fileName), options: .atomic)
+        try? data.write(
+            to: directory.appendingPathComponent(Self.fileName),
+            options: [.atomic, .completeFileProtectionUnlessOpen]
+        )
     }
 
     /// Writes the pages that stay down now, without waiting for the next
