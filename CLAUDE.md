@@ -93,6 +93,22 @@ Both live in the page menu (the ☰ button in the address pill).
 - Approach: profile with Instruments (SwiftUI and Time Profiler templates, Animation Hitches) on a CI-built, development-signed run where possible. Otherwise add `os_signpost` intervals around the transitions and log hitch timings in a debug setting Leo can read. Usual suspects: snapshot captures on the main thread during a transition, SwiftUI view bodies re-running for every card each frame, shadows and blur materials without `compositingGroup`/`drawingGroup`, oversized thumbnails, and waking sleeping web views mid-animation.
 - Target: a steady 120 Hz on ProMotion phones for the tab transitions, with Leo's real tab count (30+).
 
+### 10. Downloads (Leo, 2026-11-27)
+- A **Downloads** panel listing ongoing downloads (progress, cancel) and completed ones (open, share, show in Files). Reachable from the ☰ menu and the existing download capsule.
+- The list lives in memory only: it is empty again after the app is quit. The files themselves stay where they were saved.
+- **Settings → Downloads → Save to:** pick a default folder with Apple's folder picker (`UIDocumentPickerViewController` for folders): iCloud Drive, On My iPhone, or any Files provider. Keep it as a security-scoped bookmark. If the folder is gone or access lapses, fall back to the app's own Documents folder (today's behaviour) and say so.
+- Build on the existing `BrowserDownloads.swift`.
+
+### 11. Backup: import and export (Leo, 2026-11-27)
+- **Settings → Backup:** Export a full backup, and Import one. Leo chooses the file or folder each time with Apple's Files picker.
+- **What a backup holds:** all app settings (search engines, translation, dark mode and its per-site list, content blocking and per-site switches, site permissions, toolbar, private-tab settings) and the open normal tabs (address, title, order). Possibly browsing history and the Raindrop link state once those exist.
+- **What it never holds:** private tabs, caches, thumbnails, website data such as cookies and logins, and secrets: the Firefox Account session and Raindrop tokens stay in the Keychain, so Leo signs in again after a restore.
+- **Format:** one versioned JSON file (`Z-Browser-backup-YYYY-MM-DD.json`), so later versions can still read older backups.
+- **Import:** shows what the backup contains and asks before replacing the current settings. Tabs are added to the open ones, not swapped in.
+- **Automatic backup:** off, daily, weekly or monthly, into a folder Leo picks (security-scoped bookmark), keeping the last few files (for example 5).
+  - iOS has no reliable timer for apps. The backup runs when the app opens or comes to the front and the last one is older than the interval. A `BGAppRefreshTask` is added as a bonus when iOS allows it.
+  - Show the date of the last successful backup, and a clear note if the folder can't be reached.
+
 ## Suggested order of work
 
 1. Get the fork building: unsigned-IPA workflow in GitHub Actions, and confirm it installs on Leo's phone.
@@ -105,6 +121,7 @@ Both live in the page menu (the ☰ button in the address pill).
 7. Raindrop.io integration and quick-bookmark button.
 8. Filter lists, then cosmetic filters and scriptlets, then auto-updates.
 9. Browser-only VPN through Proton WireGuard.
+9b. Downloads panel and default save folder; then backup (import/export and automatic). The order of these can move if Leo asks.
 10. Frosted-glass polish and fullscreen button, tuned on the real phone.
 
 ## Open questions to answer by reading the code first
