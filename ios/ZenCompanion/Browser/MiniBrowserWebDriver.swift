@@ -773,6 +773,8 @@ final class MiniBrowserWebDriver: NSObject, WKNavigationDelegate, WKUIDelegate {
             if let model = self.model { model.host?.pageDidFinishLoading(model) }
             self.model?.adoptPageTitle(webView.title ?? "")
             self.model?.recordVisit()
+            // Settings → Translation → Translate automatically.
+            self.model?.translateAutomaticallyIfNeeded()
             // A page whose own scripts rewrote the root style gets the
             // zoom back once it has settled.
             self.model?.applyPageZoom(force: true)

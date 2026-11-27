@@ -18,6 +18,8 @@ struct PageTranslationJob: Equatable {
     let id = UUID()
     /// BCP-47 code of the page's language, as detected on the device.
     let source: String
+    /// The language to translate into (Settings → Translation).
+    let target: String
     let texts: [String]
 }
 
@@ -185,13 +187,36 @@ extension MiniBrowserModel {
         translation == .translated || translation == .working
     }
 
+    /// The ☰ switch. Turning it off also turns off automatic translation,
+    /// so the page stays as it is.
     func toggleTranslation() {
-        if isTranslationOn { showOriginalText() } else { startTranslation() }
+        if isTranslationOn {
+            if TranslationSettings.shared.autoTranslate {
+                TranslationSettings.shared.autoTranslate = false
+            }
+            showOriginalText()
+        } else {
+            startTranslation()
+        }
+    }
+
+    /// A page finished loading: with automatic translation on, a page in a
+    /// language that is not the target and not on the never list translates.
+    func translateAutomaticallyIfNeeded() {
+        guard Self.canTranslate,
+              TranslationSettings.shared.autoTranslate,
+              !autoTranslateChecked,
+              translation == .original,
+              let scheme = effectiveURL?.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else { return }
+        autoTranslateChecked = true
+        startTranslation(automatic: true)
     }
 
     /// Collects the page's text and detects its language. The translation
     /// itself runs in `runTranslation`, once the view hands over a session.
-    func startTranslation() {
+    /// Automatic: a page that needs no translation stays as it is, silently.
+    func startTranslation(automatic: Bool = false) {
         guard let webView else { return }
         translation = .working
         Task { @MainActor in
@@ -205,28 +230,43 @@ extension MiniBrowserModel {
                 let texts = (result as? [String]) ?? []
                 guard translation == .working else { return }
                 guard !texts.isEmpty else {
-                    translation = .failed("Nothing to translate on this page.")
+                    leaveUntranslated(automatic: automatic, note: .failed("Nothing to translate on this page."))
                     return
                 }
                 let sample = String(texts.prefix(300).joined(separator: " ").prefix(6000))
                 let recognizer = NLLanguageRecognizer()
                 recognizer.processString(sample)
                 guard let language = recognizer.dominantLanguage else {
-                    translation = .failed("Couldn't tell what language this page is in.")
+                    leaveUntranslated(automatic: automatic, note: .failed("Couldn't tell what language this page is in."))
                     return
                 }
-                let pageLanguage = Locale.Language(identifier: language.rawValue).languageCode
-                let myLanguage = Locale.Language(identifier: Locale.preferredLanguages.first ?? "en").languageCode
-                if pageLanguage != nil, pageLanguage == myLanguage {
-                    translation = .sameLanguage
-                    restoreOriginalText()
+                let settings = TranslationSettings.shared
+                let target = settings.effectiveTarget
+                let pageCode = Locale.Language(identifier: language.rawValue).languageCode?.identifier
+                if let pageCode, pageCode == target.languageCode?.identifier {
+                    leaveUntranslated(automatic: automatic, note: .sameLanguage)
                     return
                 }
-                translationJob = PageTranslationJob(source: language.rawValue, texts: texts)
+                if automatic, let pageCode, settings.isNeverTranslated(pageCode) {
+                    leaveUntranslated(automatic: true, note: .original)
+                    return
+                }
+                translationJob = PageTranslationJob(
+                    source: language.rawValue,
+                    target: target.minimalIdentifier,
+                    texts: texts
+                )
             } catch {
-                translation = .failed("This page can't be translated.")
+                leaveUntranslated(automatic: automatic, note: .failed("This page can't be translated."))
             }
         }
+    }
+
+    /// No translation for this page. A page checked automatically shows no
+    /// note: the reader did not ask.
+    private func leaveUntranslated(automatic: Bool, note: PageTranslationState) {
+        translation = automatic ? .original : note
+        restoreOriginalText()
     }
 
     func showOriginalText() {
@@ -241,6 +281,7 @@ extension MiniBrowserModel {
         stopTranslationFeed()
         translationJob = nil
         translation = .original
+        autoTranslateChecked = false
     }
 
     /// Text the translated page added, from the page script.
@@ -368,12 +409,12 @@ private struct PageTranslationSessionHost: ViewModifier {
             .onChange(of: model.translationJob?.id) { _, _ in
                 guard let job = model.translationJob else { return }
                 let source = Locale.Language(identifier: job.source)
-                if configuration?.source == source {
+                let target = Locale.Language(identifier: job.target)
+                if configuration?.source == source, configuration?.target == target {
                     // Same languages: run the session again for this job.
                     configuration?.invalidate()
                 } else {
-                    // No target: the framework uses the reader's own language.
-                    configuration = TranslationSession.Configuration(source: source, target: nil)
+                    configuration = TranslationSession.Configuration(source: source, target: target)
                 }
             }
     }

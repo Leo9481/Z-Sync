@@ -303,6 +303,21 @@ struct SettingsSheet: View {
                     }
                 }
                 .buttonStyle(PressedButtonStyle())
+
+                SettingsHairline(scheme: scheme)
+
+                NavigationLink {
+                    TranslationSettingsPage(scheme: scheme)
+                } label: {
+                    SettingsRow(
+                        title: "Translation",
+                        systemImage: "translate",
+                        scheme: scheme
+                    ) {
+                        SettingsChevron(scheme: scheme)
+                    }
+                }
+                .buttonStyle(PressedButtonStyle())
             }
             .liftCard(scheme)
         }
@@ -635,6 +650,117 @@ private struct PrivacySettingsPage: View {
         } message: {
             Text("settings.clear_website_data.message")
         }
+    }
+}
+
+/// Translation: the language pages are translated into, automatic
+/// translation, and the languages automatic translation leaves alone.
+private struct TranslationSettingsPage: View {
+    let scheme: ColorScheme
+
+    @Bindable private var settings = TranslationSettings.shared
+    @State private var languages: [String] = []
+
+    var body: some View {
+        SettingsSubpage(title: "Translation", scheme: scheme) {
+            if MiniBrowserModel.canTranslate {
+                VStack(spacing: 0) {
+                    SettingsRow(title: "Translate to", systemImage: "translate", scheme: scheme) {
+                        Menu {
+                            Button {
+                                settings.targetLanguage = nil
+                            } label: {
+                                choice("Phone language", selected: settings.targetLanguage == nil)
+                            }
+                            ForEach(languages, id: \.self) { language in
+                                Button {
+                                    settings.targetLanguage = language
+                                } label: {
+                                    choice(
+                                        TranslationSettings.displayName(language),
+                                        selected: settings.targetLanguage == language
+                                    )
+                                }
+                            }
+                        } label: {
+                            SettingsMenuValue(text: targetName, scheme: scheme)
+                        }
+                    }
+
+                    SettingsHairline(scheme: scheme)
+
+                    SettingsToggleRow(
+                        title: "Translate automatically",
+                        systemImage: "wand.and.stars",
+                        scheme: scheme,
+                        subtitle: "Pages in other languages translate as they open",
+                        isOn: $settings.autoTranslate
+                    )
+                }
+                .liftCard(scheme)
+
+                SettingsSection(title: "Never translate automatically", scheme: scheme) {
+                    VStack(spacing: 0) {
+                        let codes = TranslationSettings.languageCodes(of: languages)
+                        ForEach(Array(codes.enumerated()), id: \.element) { index, code in
+                            if index > 0 { SettingsHairline(scheme: scheme) }
+                            neverRow(code)
+                        }
+                        if codes.isEmpty {
+                            ProgressView()
+                                .frame(maxWidth: .infinity, minHeight: 54)
+                        }
+                    }
+                    .liftCard(scheme)
+                }
+            } else {
+                Text(verbatim: "Translation needs iOS 18 or later.")
+                    .zenFont(15, design: .rounded)
+                    .foregroundStyle(Palette.ink(scheme).opacity(0.6))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .task {
+            languages = await TranslationSettings.supportedLanguages()
+        }
+    }
+
+    private var targetName: String {
+        settings.targetLanguage.map(TranslationSettings.displayName) ?? "Phone language"
+    }
+
+    @ViewBuilder
+    private func choice(_ title: String, selected: Bool) -> some View {
+        if selected {
+            Label(title, systemImage: "checkmark")
+        } else {
+            Text(title)
+        }
+    }
+
+    /// Tapping the row adds the language to the list or takes it off.
+    private func neverRow(_ code: String) -> some View {
+        let never = settings.isNeverTranslated(code)
+        return Button {
+            settings.setNeverTranslated(code, !never)
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(Palette.coral(scheme))
+                    .frame(width: 20)
+                    .opacity(never ? 1 : 0)
+                Text(TranslationSettings.displayName(code))
+                    .zenFont(16, weight: .medium, design: .rounded)
+                    .foregroundStyle(Palette.ink(scheme))
+                Spacer(minLength: 8)
+            }
+            .padding(.horizontal, 16)
+            .frame(minHeight: 50)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PressedButtonStyle())
+        .accessibilityAddTraits(never ? .isSelected : [])
     }
 }
 
