@@ -24,7 +24,7 @@
 			<key>CFBundleTypeRole</key>
 			<string>Viewer</string>
 			<key>CFBundleURLName</key>
-			<string>de.kjell.zencompanion.zsync</string>
+			<string>io.github.leo9481.zenbrowser.zsync</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>zsync</string>
@@ -34,7 +34,7 @@
 			<key>CFBundleTypeRole</key>
 			<string>Viewer</string>
 			<key>CFBundleURLName</key>
-			<string>de.kjell.zencompanion.web</string>
+			<string>io.github.leo9481.zenbrowser.web</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>http</string>

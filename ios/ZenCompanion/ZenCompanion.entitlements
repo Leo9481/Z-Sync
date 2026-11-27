@@ -4,11 +4,11 @@
 <dict>
 	<key>com.apple.security.application-groups</key>
 	<array>
-		<string>group.de.kjell.zencompanion</string>
+		<string>group.io.github.leo9481.zenbrowser</string>
 	</array>
 	<key>keychain-access-groups</key>
 	<array>
-		<string>$(AppIdentifierPrefix)de.kjell.zencompanion</string>
+		<string>$(AppIdentifierPrefix)io.github.leo9481.zenbrowser</string>
 	</array>
 </dict>
 </plist>
