@@ -256,6 +256,8 @@ struct MiniBrowserView: View {
                     )
                 }
             )
+            // Page translation borrows Apple's session through the view.
+            .modifier(PageTranslationTask(model: model))
             // On a wide display (iPad, the open iPhone Duo) the bar and the
             // overview's buttons keep a width the thumbs can span, centred,
             // instead of running from edge to edge.
