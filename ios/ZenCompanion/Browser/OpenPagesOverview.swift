@@ -128,6 +128,121 @@ struct PageGridGeometry {
     }
 }
 
+/// Moves the grid frame by frame once the finger lets go: it coasts and slows
+/// like a system scroll view, and springs back past either end.
+///
+/// SwiftUI's own animation can't do this: it would show the grid at its end
+/// position at once to every card that comes into view, so a card that only
+/// fits on screen at the end would sit there while the others scroll past.
+/// Here `scroll` is the true position every frame, so only the cards really
+/// on screen are drawn, and they are drawn where they are.
+///
+/// The display link asks for up to 120 frames a second and iOS gives what the
+/// screen runs at: 60 in Low Power Mode, or on a display without ProMotion.
+@MainActor
+final class GridScrollDriver: NSObject {
+    /// How much speed is kept every millisecond, like UIScrollView's normal rate.
+    private static let deceleration: Double = 0.998
+    /// The spring back to an end, or to a given place: critically damped,
+    /// settling in about half a second.
+    private static let stiffness: Double = 180
+    private static var damping: Double { 2 * stiffness.squareRoot() }
+
+    private var link: CADisplayLink?
+    private var lastTime: CFTimeInterval?
+    private var velocity: Double = 0
+    /// A fixed place to spring to; with none it coasts, then keeps in bounds.
+    private var target: Double?
+    private var read: () -> CGFloat = { 0 }
+    private var write: (CGFloat) -> Void = { _ in }
+    private var bounds: () -> ClosedRange<CGFloat> = { 0...0 }
+
+    var isRunning: Bool { link != nil }
+
+    /// Coasts on from `velocity` (points a second, in the scroll's direction).
+    func coast(
+        velocity: CGFloat,
+        read: @escaping () -> CGFloat,
+        write: @escaping (CGFloat) -> Void,
+        bounds: @escaping () -> ClosedRange<CGFloat>
+    ) {
+        self.velocity = Double(velocity)
+        target = nil
+        start(read: read, write: write, bounds: bounds)
+    }
+
+    /// Springs to `place`.
+    func spring(
+        to place: CGFloat,
+        read: @escaping () -> CGFloat,
+        write: @escaping (CGFloat) -> Void,
+        bounds: @escaping () -> ClosedRange<CGFloat>
+    ) {
+        if !isRunning { velocity = 0 }
+        target = Double(place)
+        start(read: read, write: write, bounds: bounds)
+    }
+
+    func stop() {
+        link?.invalidate()
+        link = nil
+        lastTime = nil
+        velocity = 0
+        target = nil
+    }
+
+    private func start(
+        read: @escaping () -> CGFloat,
+        write: @escaping (CGFloat) -> Void,
+        bounds: @escaping () -> ClosedRange<CGFloat>
+    ) {
+        self.read = read
+        self.write = write
+        self.bounds = bounds
+        guard link == nil else { return }
+        let link = CADisplayLink(target: self, selector: #selector(step(_:)))
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
+        link.add(to: .main, forMode: .common)
+        self.link = link
+    }
+
+    @objc private func step(_ link: CADisplayLink) {
+        let now = link.targetTimestamp
+        // The first frame has no time behind it: it only takes a reading.
+        let dt = min(1.0 / 30, max(0, now - (lastTime ?? now)))
+        lastTime = now
+        guard dt > 0 else { return }
+
+        var position = Double(read())
+        let range = bounds()
+        let low = Double(range.lowerBound)
+        let high = Double(range.upperBound)
+
+        if target == nil, position >= low, position <= high {
+            // Coasting inside the grid.
+            velocity *= pow(Self.deceleration, dt * 1000)
+            position += velocity * dt
+            if abs(velocity) < 8 {
+                write(CGFloat(position))
+                stop()
+                return
+            }
+        } else {
+            // A spring: to the given place, or back to the end it went past.
+            let goal = target.map { min(high, max(low, $0)) } ?? min(high, max(low, position))
+            let force = -Self.stiffness * (position - goal) - Self.damping * velocity
+            velocity += force * dt
+            position += velocity * dt
+            if abs(position - goal) < 0.4, abs(velocity) < 8 {
+                write(CGFloat(goal))
+                stop()
+                return
+            }
+        }
+        write(CGFloat(position))
+    }
+}
+
 /// Every open page of the section on screen as a card, in a grid like
 /// Safari's. The grid scrolls under the finger; a card opens with a tap,
 /// closes with its × or a swipe sideways, and long press has the rest. It
@@ -163,6 +278,7 @@ struct OpenPagesOverview: View {
     /// The card being swiped sideways to close it, and how far.
     @State private var swipedID: String?
     @State private var swipe: CGFloat = 0
+    @State private var driver = GridScrollDriver()
 
     private enum DragAxis { case vertical, sideways, ignored }
 
@@ -191,11 +307,12 @@ struct OpenPagesOverview: View {
                 // that closes itself, a page that expires. The grid must not
                 // stay scrolled past its new end.
                 let clamped = grid.clamped(scroll)
-                if clamped != scroll {
-                    withAnimation(.spring(duration: 0.34, bounce: 0)) { scroll = clamped }
+                if clamped != scroll, dragAxis != .vertical {
+                    drive(grid) { $0.spring(to: clamped, read: $1, write: $2, bounds: $3) }
                 }
             }
         }
+        .onDisappear { driver.stop() }
         // The cards are laid out from the reader's origin, so the finger is
         // read from there too.
         .coordinateSpace(.named(Self.gridSpace))
@@ -251,7 +368,10 @@ struct OpenPagesOverview: View {
                         isNear: grid.isNear(index: index, scroll: scroll),
                         isExpanding: isExpanding,
                         expansion: grown,
-                        onOpen: { onOpen(page) },
+                        onOpen: {
+                            driver.stop()
+                            onOpen(page)
+                        },
                         onClose: { close(page) }
                     ) {
                         menu(for: page)
@@ -301,6 +421,8 @@ struct OpenPagesOverview: View {
     }
 
     private func chooseAxis(for value: DragGesture.Value, in grid: PageGridGeometry) {
+        // The finger catches the grid where it is.
+        driver.stop()
         let width = abs(value.translation.width)
         let height = abs(value.translation.height)
         if height >= width {
@@ -324,13 +446,39 @@ struct OpenPagesOverview: View {
     /// The grid coasts on at the finger's speed and comes to rest within its
     /// ends, springing back if it was pulled past one.
     private func settle(_ value: DragGesture.Value, in grid: PageGridGeometry) {
-        let thrown = scroll - (value.predictedEndTranslation.height - value.translation.height)
-        let target = grid.clamped(thrown)
-        let distance = target - scroll
-        let speed = distance == 0 ? 0 : min(12, max(-12, -value.velocity.height / distance))
-        withAnimation(.interpolatingSpring(duration: 0.55, bounce: 0, initialVelocity: speed)) {
-            scroll = target
-        }
+        // The finger moving up scrolls the grid down.
+        let velocity = -value.velocity.height
+        drive(grid) { $0.coast(velocity: velocity, read: $1, write: $2, bounds: $3) }
+    }
+
+    /// Hands the driver the scroll, and the grid's ends as they are on each
+    /// frame: a card can close while the grid moves.
+    private func drive(
+        _ grid: PageGridGeometry,
+        _ start: (
+            GridScrollDriver,
+            @escaping () -> CGFloat,
+            @escaping (CGFloat) -> Void,
+            @escaping () -> ClosedRange<CGFloat>
+        ) -> Void
+    ) {
+        let binding = $scroll
+        let pages = pages
+        let excluded = excludedCardID
+        start(
+            driver,
+            { binding.wrappedValue },
+            { binding.wrappedValue = $0 },
+            {
+                let now = PageGridGeometry(
+                    screen: grid.screen,
+                    count: pages.pages.filter { $0.id != excluded }.count,
+                    topInset: grid.topInset,
+                    bottomClearance: grid.bottomClearance
+                )
+                return 0...now.maxScroll
+            }
+        )
     }
 
     /// Thrown or pulled far enough the card leaves off the side and closes;

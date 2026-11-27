@@ -58,6 +58,10 @@ targets:
               - http
               - https
         UILaunchScreen: {}
+        # Without it an iPhone app's own animations stop at 60 frames a second
+        # on a 120 Hz display. iOS still lowers the rate when the display does
+        # (Low Power Mode, battery heat), so animations follow the screen.
+        CADisableMinimumFrameDurationOnPhone: true
         CFBundleDevelopmentRegion: en
         ITSAppUsesNonExemptEncryption: false
         NSAppTransportSecurity:
