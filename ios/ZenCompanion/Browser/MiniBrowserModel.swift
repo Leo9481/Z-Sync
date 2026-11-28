@@ -792,10 +792,19 @@ final class MiniBrowserModel {
     /// synced tab, an allowed redirect): never a redirect to block.
     @ObservationIgnored var appLoadAt: CFTimeInterval = 0
 
-    /// A popup that tried to open another app: a notice offers it instead.
-    func showBlockedAppLink(_ url: URL, open: @escaping () -> Void) {
-        let app = url.scheme.map { $0.prefix(1).uppercased() + $0.dropFirst() } ?? "an app"
-        showNotice("Blocked opening \(app)", symbol: "hand.raised.fill", actionTitle: "Open", action: open)
+    /// A link to another app: the small notice asks, and fades if ignored.
+    func offerAppLink(_ url: URL, open: @escaping () -> Void) {
+        showNotice("Open in \(Self.appName(for: url))?", symbol: "arrow.up.forward.app", actionTitle: "Open", action: open)
+    }
+
+    /// A readable name for the app a link points to, from its scheme.
+    private static func appName(for url: URL) -> String {
+        guard let scheme = url.scheme?.lowercased() else { return "app" }
+        if scheme.hasPrefix("itms") { return "App Store" }
+        let known = ["fb": "Facebook", "instagram": "Instagram", "youtube": "YouTube", "twitter": "X", "whatsapp": "WhatsApp",
+                     "tg": "Telegram", "spotify": "Spotify", "maps": "Maps", "comgooglemaps": "Google Maps"]
+        if let name = known[scheme] { return name }
+        return scheme.prefix(1).uppercased() + scheme.dropFirst()
     }
 
     /// A popup or redirect the page tried without a tap: a notice says so,

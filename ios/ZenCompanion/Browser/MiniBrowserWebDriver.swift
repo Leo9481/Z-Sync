@@ -178,7 +178,7 @@ final class MiniBrowserWebDriver: NSObject, WKNavigationDelegate, WKUIDelegate {
         if let url, !BrowserNavigationPolicy.loadsInWebView(url) {
             // A popup aimed at an app never opens it by itself (ads do this
             // to launch shopping apps): a notice offers it instead.
-            MainActor.assumeIsolated { model?.showBlockedAppLink(url) { [weak self] in self?.handOff(url) } }
+            MainActor.assumeIsolated { model?.offerAppLink(url) { [weak self] in self?.handOff(url) } }
             return nil
         }
         // An ad by the filter lists: refused whatever opened it, a sized
@@ -403,6 +403,8 @@ final class MiniBrowserWebDriver: NSObject, WKNavigationDelegate, WKUIDelegate {
     /// nothing reads like a broken browser.
     /// WebKit's "allow, but don't try to open an app for it" (Firefox for iOS
     /// uses the same value). Not in the public enum; falls back to allow.
+    private static let opensWithoutAsking: Set<String> = ["mailto", "tel", "sms", "facetime", "facetime-audio"]
+
     private static let allowWithoutAppLink =
         WKNavigationActionPolicy(rawValue: WKNavigationActionPolicy.allow.rawValue + 2) ?? .allow
 
@@ -461,22 +463,24 @@ final class MiniBrowserWebDriver: NSObject, WKNavigationDelegate, WKUIDelegate {
             MainActor.assumeIsolated { model?.prepareBlocking(for: url) }
         }
         guard let url = navigationAction.request.url, !BrowserNavigationPolicy.loadsInWebView(url) else {
-            // An app that claims the address (a universal link) opens only
-            // for a link the reader tapped in the page itself. Popups, redirects
-            // and anything a script starts load here instead.
-            let isMainFrame = navigationAction.targetFrame?.isMainFrame ?? true
-            let tapped = navigationAction.navigationType == .linkActivated && isMainFrame
-                && MainActor.assumeIsolated({ model?.popupOpenerHost == nil })
-            decisionHandler(tapped ? .allow : Self.allowWithoutAppLink, preferences)
+            // A web address always loads here, even when an installed app
+            // claims it (a universal link): an ad under the finger looks just
+            // like a link the reader meant, so pages never open apps.
+            decisionHandler(Self.allowWithoutAppLink, preferences)
             return
         }
-        // Only a tap in the main frame may leave the app; a page that
-        // opens another app on its own is ignored.
+        // A link to another app: only from a tap in the main frame, and then
+        // it asks with the small notice, which can be ignored. Mail, phone and
+        // messages open at once; ads don't use them.
         if BrowserNavigationPolicy.opensExternally(
             userTapped: navigationAction.navigationType == .linkActivated,
             isMainFrame: navigationAction.targetFrame?.isMainFrame ?? true
         ) {
-            handOff(url)
+            if Self.opensWithoutAsking.contains(url.scheme?.lowercased() ?? "") {
+                handOff(url)
+            } else {
+                MainActor.assumeIsolated { model?.offerAppLink(url) { [weak self] in self?.handOff(url) } }
+            }
         }
         decisionHandler(.cancel, preferences)
     }
