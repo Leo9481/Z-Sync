@@ -7,11 +7,14 @@ import WebKit
 /// The browser-only VPN: the browser's traffic, and only the browser's, goes
 /// through one of the reader's WireGuard servers (Proton VPN configs).
 ///
+/// Servers are grouped in profiles ("Italy", "US", ...): one profile is in
+/// use at a time, and its servers are the fallbacks for each other.
+///
 /// The tunnel runs in the app (go/zbwg: wireguard-go in user space) behind a
 /// SOCKS5 proxy on 127.0.0.1 with a random password, and WebKit's data stores
-/// are pointed at that proxy. The servers are tried in order until one
-/// carries traffic; a server that stops answering hands over to the next. If
-/// none answers, the VPN turns itself off and says so.
+/// are pointed at that proxy. The profile's servers are tried in order until
+/// one carries traffic; a server that stops answering hands over to the next.
+/// If none answers, the VPN turns itself off and says so.
 ///
 /// While it is on but not connected, pages don't load at all: the proxy
 /// points nowhere rather than letting traffic out without the tunnel.
@@ -27,26 +30,52 @@ final class BrowserVPN {
         var config: String
     }
 
+    /// A named set of servers, tried in their order.
+    struct Profile: Codable, Identifiable, Hashable {
+        var id = UUID()
+        var name: String
+        var servers: [Server] = []
+    }
+
     enum Status: Equatable {
         case off
         case connecting(String)
         case connected(String)
     }
 
-    private(set) var servers: [Server] = []
+    private(set) var profiles: [Profile] = []
+    /// The profile in use. Kept in UserDefaults: an id, not a secret.
+    private(set) var activeProfileID: UUID? {
+        didSet { UserDefaults.standard.set(activeProfileID?.uuidString, forKey: Self.profileKey) }
+    }
     private(set) var status: Status = .off
     /// Set when every server failed and the VPN turned itself off.
     var allFailedMessage: String?
 
     var isEnabled: Bool {
-        get { UserDefaults.standard.bool(forKey: Self.enabledKey) }
+        get { enabled }
         set {
+            enabled = newValue
             UserDefaults.standard.set(newValue, forKey: Self.enabledKey)
             enabledChanged()
         }
     }
 
+    /// Stored, so views watching `isEnabled` update.
+    private var enabled = UserDefaults.standard.bool(forKey: BrowserVPN.enabledKey)
+
+    var activeProfile: Profile? {
+        profiles.first { $0.id == activeProfileID } ?? profiles.first
+    }
+
+    /// The servers of the profile in use.
+    var servers: [Server] { activeProfile?.servers ?? [] }
+
+    /// Profiles that can be switched to: the ones with servers.
+    var usableProfiles: [Profile] { profiles.filter { !$0.servers.isEmpty } }
+
     private static let enabledKey = "browserVPN.enabled"
+    private static let profileKey = "browserVPN.profile"
     private let proxyUser = UUID().uuidString
     private let proxyPass = UUID().uuidString
     private var port: Int?
@@ -56,7 +85,9 @@ final class BrowserVPN {
     private var currentIndex = 0
 
     private init() {
-        servers = Self.loadServers()
+        profiles = Self.loadProfiles()
+        activeProfileID = UserDefaults.standard.string(forKey: Self.profileKey).flatMap(UUID.init(uuidString:))
+        if activeProfile?.id != activeProfileID { activeProfileID = activeProfile?.id }
     }
 
     /// At launch: brings the tunnel up if the VPN was left on.
@@ -65,27 +96,99 @@ final class BrowserVPN {
         enabledChanged()
     }
 
+    // MARK: - Profiles
+
+    @discardableResult
+    func addProfile(name: String) -> Profile {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let profile = Profile(name: trimmed.isEmpty ? "Profile \(profiles.count + 1)" : trimmed)
+        profiles.append(profile)
+        if activeProfileID == nil { activeProfileID = profile.id }
+        saveProfiles()
+        return profile
+    }
+
+    func renameProfile(_ id: UUID, to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let i = index(of: id) else { return }
+        profiles[i].name = trimmed
+        saveProfiles()
+    }
+
+    func removeProfile(_ id: UUID) {
+        guard let i = index(of: id) else { return }
+        let wasActive = activeProfile?.id == id
+        profiles.remove(at: i)
+        saveProfiles()
+        if wasActive {
+            activeProfileID = profiles.first?.id
+            activeServersChanged()
+        }
+    }
+
+    func moveProfile(_ id: UUID, by offset: Int) {
+        guard let i = index(of: id), profiles.indices.contains(i + offset) else { return }
+        profiles.swapAt(i, i + offset)
+        saveProfiles()
+    }
+
+    /// Makes a profile the one in use; reconnects when the VPN is on.
+    func selectProfile(_ id: UUID) {
+        guard index(of: id) != nil, activeProfile?.id != id else { return }
+        activeProfileID = id
+        activeServersChanged()
+    }
+
+    /// From the browser menu: use this profile, and turn the VPN on.
+    func use(_ id: UUID) {
+        guard let i = index(of: id), !profiles[i].servers.isEmpty else { return }
+        if activeProfile?.id != id {
+            activeProfileID = id
+            if isEnabled { enabledChanged() }
+        }
+        if !isEnabled { isEnabled = true }
+    }
+
+    private func index(of id: UUID) -> Int? {
+        profiles.firstIndex { $0.id == id }
+    }
+
     // MARK: - Servers
 
-    func addServer(name: String, config: String) -> String? {
+    func addServer(to profileID: UUID, name: String, config: String) -> String? {
         let text = config.trimmingCharacters(in: .whitespacesAndNewlines)
         guard text.contains("[Interface]"), text.contains("[Peer]"), text.contains("PrivateKey") else {
             return "That isn't a WireGuard config."
         }
-        servers.append(Server(name: name, config: text))
-        saveServers()
+        guard let i = index(of: profileID) else { return "That profile is gone." }
+        profiles[i].servers.append(Server(name: name, config: text))
+        saveProfiles()
         return nil
     }
 
-    func removeServers(at offsets: IndexSet) {
-        servers.remove(atOffsets: offsets)
-        saveServers()
-        if servers.isEmpty, isEnabled { isEnabled = false }
+    func removeServer(_ serverID: UUID, from profileID: UUID) {
+        guard let i = index(of: profileID) else { return }
+        profiles[i].servers.removeAll { $0.id == serverID }
+        saveProfiles()
+        if profileID == activeProfile?.id { activeServersChanged() }
     }
 
-    func moveServers(from source: IndexSet, to destination: Int) {
-        servers.move(fromOffsets: source, toOffset: destination)
-        saveServers()
+    func moveServer(_ serverID: UUID, in profileID: UUID, by offset: Int) {
+        guard let i = index(of: profileID),
+              let j = profiles[i].servers.firstIndex(where: { $0.id == serverID }),
+              profiles[i].servers.indices.contains(j + offset) else { return }
+        profiles[i].servers.swapAt(j, j + offset)
+        saveProfiles()
+    }
+
+    /// The profile in use changed, or lost servers: reconnect, or turn off
+    /// when nothing is left to connect to.
+    private func activeServersChanged() {
+        if servers.isEmpty {
+            if isEnabled { isEnabled = false }
+        } else if isEnabled {
+            enabledChanged()
+        }
     }
 
     // MARK: - Connecting
@@ -94,20 +197,32 @@ final class BrowserVPN {
         connectTask?.cancel()
         monitorTask?.cancel()
         if isEnabled, !servers.isEmpty {
+            allFailedMessage = nil
             // Nothing leaves without the tunnel while it comes up.
             applyProxy(port: nil)
-            connectTask = Task { await connect(startingAt: 0) }
+            let previous = connectTask
+            connectTask = Task {
+                // The old attempt lets go of the tunnel before this one starts.
+                await previous?.value
+                await connect(startingAt: 0)
+            }
         } else {
             status = .off
             port = nil
             removeProxy()
-            Task.detached { zbwg_stop() }
+            let previous = connectTask
+            connectTask = Task {
+                // Stopped after any attempt still starting a tunnel.
+                await previous?.value
+                await Task.detached { zbwg_stop() }.value
+            }
         }
     }
 
     /// Tries each server in order, from `first` round to the one before it.
     private func connect(startingAt first: Int) async {
         let list = servers
+        guard !list.isEmpty else { return }
         for step in 0..<list.count {
             if Task.isCancelled { return }
             let index = (first + step) % list.count
@@ -125,7 +240,9 @@ final class BrowserVPN {
         }
         if Task.isCancelled { return }
         // None answered: off, and said so.
-        allFailedMessage = "None of your VPN servers answered, so the browser VPN was turned off. Pages load without it now."
+        let profile = activeProfile.map { " in \u{201C}\($0.name)\u{201D}" } ?? ""
+        allFailedMessage = "None of the VPN servers\(profile) answered, so the browser VPN was turned off. Pages load without it now."
+        enabled = false
         UserDefaults.standard.set(false, forKey: Self.enabledKey)
         status = .off
         port = nil
@@ -212,30 +329,52 @@ final class BrowserVPN {
 
     // MARK: - Keychain
 
-    private static let keychain: [String: Any] = [
-        kSecClass as String: kSecClassGenericPassword,
-        kSecAttrService as String: "io.github.leo9481.zenbrowser.vpn",
-        kSecAttrAccount as String: "servers",
-    ]
+    private static func keychain(_ account: String) -> [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "io.github.leo9481.zenbrowser.vpn",
+            kSecAttrAccount as String: account,
+        ]
+    }
 
-    private static func loadServers() -> [Server] {
-        var query = keychain
+    private static func readKeychain(_ account: String) -> Data? {
+        var query = keychain(account)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess, let data = item as? Data else { return [] }
-        return (try? JSONDecoder().decode([Server].self, from: data)) ?? []
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess else { return nil }
+        return item as? Data
     }
 
-    private func saveServers() {
-        guard let data = try? JSONEncoder().encode(servers) else { return }
+    private static func loadProfiles() -> [Profile] {
+        if let data = readKeychain("profiles") {
+            return (try? JSONDecoder().decode([Profile].self, from: data)) ?? []
+        }
+        // A plain server list, from before profiles: one profile holding it.
+        guard let data = readKeychain("servers"),
+              let servers = try? JSONDecoder().decode([Server].self, from: data),
+              !servers.isEmpty else { return [] }
+        let profiles = [Profile(name: "My servers", servers: servers)]
+        if writeKeychain("profiles", profiles) {
+            SecItemDelete(keychain("servers") as CFDictionary)
+        }
+        return profiles
+    }
+
+    private func saveProfiles() {
+        Self.writeKeychain("profiles", profiles)
+    }
+
+    @discardableResult
+    private static func writeKeychain(_ account: String, _ profiles: [Profile]) -> Bool {
+        guard let data = try? JSONEncoder().encode(profiles) else { return false }
         let attributes: [String: Any] = [
             kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
         ]
-        if SecItemUpdate(Self.keychain as CFDictionary, attributes as CFDictionary) == errSecSuccess { return }
-        var entry = Self.keychain
+        if SecItemUpdate(keychain(account) as CFDictionary, attributes as CFDictionary) == errSecSuccess { return true }
+        var entry = keychain(account)
         entry.merge(attributes) { $1 }
-        SecItemAdd(entry as CFDictionary, nil)
+        return SecItemAdd(entry as CFDictionary, nil) == errSecSuccess
     }
 }

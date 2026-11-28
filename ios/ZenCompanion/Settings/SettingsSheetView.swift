@@ -710,14 +710,14 @@ private struct PrivacySettingsPage: View {
     }
 }
 
-/// The browser-only VPN: on/off, its state, and the WireGuard servers in the
-/// order they're tried.
+/// The browser-only VPN: on/off, its state, and the profiles (each a set of
+/// WireGuard servers, tried in order).
 private struct BrowserVPNSettingsPage: View {
     let scheme: ColorScheme
 
     @Bindable private var vpn = BrowserVPN.shared
-    @State private var importing = false
-    @State private var error: String?
+    @State private var naming = false
+    @State private var newName = ""
 
     var body: some View {
         SettingsSubpage(title: "Browser VPN", scheme: scheme) {
@@ -733,63 +733,208 @@ private struct BrowserVPNSettingsPage: View {
             }
             .liftCard(scheme)
 
-            SettingsSection(title: "Servers, in the order they're tried", scheme: scheme) {
+            SettingsSection(title: "Profiles", scheme: scheme) {
                 VStack(spacing: 0) {
-                    ForEach(Array(vpn.servers.enumerated()), id: \.element.id) { index, server in
-                        if index > 0 { SettingsHairline(scheme: scheme) }
-                        serverRow(server, index: index)
+                    ForEach(vpn.profiles) { profile in
+                        if profile.id != vpn.profiles.first?.id { SettingsHairline(scheme: scheme) }
+                        profileRow(profile)
                     }
-                    if vpn.servers.isEmpty {
-                        Text(verbatim: "No servers yet. Add Proton VPN's WireGuard configs (.conf files from account.protonvpn.com → Downloads → WireGuard).")
-                            .zenFont(14, design: .rounded)
-                            .foregroundStyle(Palette.ink(scheme).opacity(0.65))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(16)
+                    if !vpn.profiles.isEmpty { SettingsHairline(scheme: scheme) }
+                    Button {
+                        newName = ""
+                        naming = true
+                    } label: {
+                        SettingsRow(title: "New profile", systemImage: "plus", scheme: scheme) { EmptyView() }
                     }
+                    .buttonStyle(PressedButtonStyle())
                 }
                 .liftCard(scheme)
             }
 
-            VStack(spacing: 0) {
-                Button { importing = true } label: {
-                    SettingsRow(title: "Add from Files", systemImage: "doc.badge.plus", scheme: scheme) { EmptyView() }
-                }
-                .buttonStyle(PressedButtonStyle())
-                SettingsHairline(scheme: scheme)
-                Button { pasteConfig() } label: {
-                    SettingsRow(title: "Paste a config", systemImage: "doc.on.clipboard", scheme: scheme) { EmptyView() }
-                }
-                .buttonStyle(PressedButtonStyle())
-            }
-            .liftCard(scheme)
-
-            if let error {
-                Text(verbatim: error)
-                    .zenFont(14, design: .rounded)
-                    .foregroundStyle(.red)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
-            Text(verbatim: "Only Z-Browser's pages go through the VPN; the rest of the phone doesn't. If a server stops answering, the next one takes over. If none answers, the VPN turns off and tells you. The configs stay on this phone, in the Keychain.")
+            Text(verbatim: "A profile is a set of servers for one purpose, like \u{201C}Italy\u{201D} for low latency or \u{201C}US\u{201D} for another country. The servers in the profile in use are tried in order: if one stops answering, the next takes over. If none answers, the VPN turns off and tells you. Switch profiles here or from the browser\u{2019}s menu.\n\nOnly Z-Browser\u{2019}s pages go through the VPN; the rest of the phone doesn\u{2019}t. The configs stay on this phone, in the Keychain.")
                 .zenFont(13, design: .rounded)
                 .foregroundStyle(Palette.ink(scheme).opacity(0.55))
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .fileImporter(isPresented: $importing, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
-            importFiles(result)
+        .alert("New profile", isPresented: $naming) {
+            TextField("Name, like Italy", text: $newName)
+            Button("Add") { vpn.addProfile(name: newName) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(verbatim: "Add its servers next: tap the profile.")
         }
     }
 
     private var statusText: String {
-        if vpn.servers.isEmpty { return "Add a server first" }
+        guard let profile = vpn.activeProfile else { return "Add a profile first" }
+        if profile.servers.isEmpty { return "Add servers to \u{201C}\(profile.name)\u{201D} first" }
         switch vpn.status {
-        case .off: return vpn.isEnabled ? "Starting…" : "Off"
-        case .connecting(let name): return "Connecting to \(name)…"
-        case .connected(let name): return "Connected via \(name)"
+        case .off: return vpn.isEnabled ? "Starting\u{2026}" : "Off"
+        case .connecting(let name): return "\(profile.name): connecting to \(name)\u{2026}"
+        case .connected(let name): return "\(profile.name): connected via \(name)"
         }
     }
 
-    private func serverRow(_ server: BrowserVPN.Server, index: Int) -> some View {
+    private func profileRow(_ profile: BrowserVPN.Profile) -> some View {
+        let inUse = profile.id == vpn.activeProfile?.id
+        return HStack(spacing: 0) {
+            Button {
+                vpn.selectProfile(profile.id)
+            } label: {
+                Image(systemName: inUse ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 20))
+                    .foregroundStyle(Palette.ink(scheme).opacity(inUse ? 0.9 : 0.35))
+                    .frame(width: 52, height: 52)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(profile.servers.isEmpty)
+            .accessibilityLabel(Text(verbatim: "Use \(profile.name)"))
+
+            NavigationLink {
+                BrowserVPNProfilePage(profileID: profile.id, scheme: scheme)
+            } label: {
+                HStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(verbatim: profile.name)
+                            .zenFont(16, weight: .medium, design: .rounded)
+                            .foregroundStyle(Palette.ink(scheme))
+                            .lineLimit(1)
+                        Text(verbatim: profile.servers.count == 1 ? "1 server" : "\(profile.servers.count) servers")
+                            .zenFont(13, design: .rounded)
+                            .foregroundStyle(Palette.ink(scheme).opacity(0.55))
+                    }
+                    Spacer(minLength: 8)
+                    SettingsChevron(scheme: scheme)
+                }
+                .padding(.trailing, 16)
+                .frame(minHeight: 52)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(PressedButtonStyle())
+        }
+    }
+}
+
+/// One VPN profile: its name, and its servers in the order they're tried.
+private struct BrowserVPNProfilePage: View {
+    let profileID: UUID
+    let scheme: ColorScheme
+
+    @Bindable private var vpn = BrowserVPN.shared
+    @Environment(\.dismiss) private var dismiss
+    @State private var importing = false
+    @State private var renaming = false
+    @State private var newName = ""
+    @State private var confirmingDelete = false
+    @State private var error: String?
+
+    private var profile: BrowserVPN.Profile? {
+        vpn.profiles.first { $0.id == profileID }
+    }
+
+    var body: some View {
+        SettingsSubpage(title: LocalizedStringKey(profile?.name ?? "Profile"), scheme: scheme) {
+            if let profile {
+                content(profile)
+            }
+        }
+        .fileImporter(isPresented: $importing, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+            importFiles(result)
+        }
+        .alert("Rename profile", isPresented: $renaming) {
+            TextField("Name", text: $newName)
+            Button("Save") { vpn.renameProfile(profileID, to: newName) }
+            Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog("Delete this profile and its servers?", isPresented: $confirmingDelete, titleVisibility: .visible) {
+            Button("Delete profile", role: .destructive) {
+                vpn.removeProfile(profileID)
+                dismiss()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func content(_ profile: BrowserVPN.Profile) -> some View {
+        let inUse = profile.id == vpn.activeProfile?.id
+
+        VStack(spacing: 0) {
+            Button {
+                vpn.selectProfile(profile.id)
+            } label: {
+                SettingsRow(
+                    title: inUse ? "In use" : "Use this profile",
+                    systemImage: inUse ? "checkmark.circle.fill" : "circle",
+                    scheme: scheme
+                ) { EmptyView() }
+            }
+            .buttonStyle(PressedButtonStyle())
+            .disabled(inUse || profile.servers.isEmpty)
+        }
+        .liftCard(scheme)
+
+        SettingsSection(title: "Servers, in the order they're tried", scheme: scheme) {
+            VStack(spacing: 0) {
+                ForEach(Array(profile.servers.enumerated()), id: \.element.id) { index, server in
+                    if index > 0 { SettingsHairline(scheme: scheme) }
+                    serverRow(server, index: index, count: profile.servers.count)
+                }
+                if profile.servers.isEmpty {
+                    Text(verbatim: "No servers yet. Add Proton VPN\u{2019}s WireGuard configs (.conf files from account.protonvpn.com \u{2192} Downloads \u{2192} WireGuard). Add two or three, so one can take over when another stops answering.")
+                        .zenFont(14, design: .rounded)
+                        .foregroundStyle(Palette.ink(scheme).opacity(0.65))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(16)
+                }
+            }
+            .liftCard(scheme)
+        }
+
+        VStack(spacing: 0) {
+            Button { importing = true } label: {
+                SettingsRow(title: "Add from Files", systemImage: "doc.badge.plus", scheme: scheme) { EmptyView() }
+            }
+            .buttonStyle(PressedButtonStyle())
+            SettingsHairline(scheme: scheme)
+            Button { pasteConfig() } label: {
+                SettingsRow(title: "Paste a config", systemImage: "doc.on.clipboard", scheme: scheme) { EmptyView() }
+            }
+            .buttonStyle(PressedButtonStyle())
+        }
+        .liftCard(scheme)
+
+        if let error {
+            Text(verbatim: error)
+                .zenFont(14, design: .rounded)
+                .foregroundStyle(.red)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+
+        VStack(spacing: 0) {
+            Button {
+                newName = profile.name
+                renaming = true
+            } label: {
+                SettingsRow(title: "Rename", systemImage: "pencil", scheme: scheme) { EmptyView() }
+            }
+            .buttonStyle(PressedButtonStyle())
+            SettingsHairline(scheme: scheme)
+            Button { vpn.moveProfile(profile.id, by: -1) } label: {
+                SettingsRow(title: "Move up in the list", systemImage: "arrow.up", scheme: scheme) { EmptyView() }
+            }
+            .buttonStyle(PressedButtonStyle())
+            .disabled(vpn.profiles.first?.id == profile.id)
+            SettingsHairline(scheme: scheme)
+            Button { confirmingDelete = true } label: {
+                SettingsRow(title: "Delete profile", systemImage: "trash", scheme: scheme, color: .red) { EmptyView() }
+            }
+            .buttonStyle(PressedButtonStyle())
+        }
+        .liftCard(scheme)
+    }
+
+    private func serverRow(_ server: BrowserVPN.Server, index: Int, count: Int) -> some View {
         HStack(spacing: 12) {
             Text(verbatim: "\(index + 1)")
                 .zenFont(15, weight: .semibold, design: .rounded)
@@ -802,15 +947,15 @@ private struct BrowserVPNSettingsPage: View {
             Spacer()
             Menu {
                 Button("Move up", systemImage: "arrow.up") {
-                    vpn.moveServers(from: IndexSet(integer: index), to: index - 1)
+                    vpn.moveServer(server.id, in: profileID, by: -1)
                 }
                 .disabled(index == 0)
                 Button("Move down", systemImage: "arrow.down") {
-                    vpn.moveServers(from: IndexSet(integer: index), to: index + 2)
+                    vpn.moveServer(server.id, in: profileID, by: 1)
                 }
-                .disabled(index == vpn.servers.count - 1)
+                .disabled(index == count - 1)
                 Button("Delete", systemImage: "trash", role: .destructive) {
-                    vpn.removeServers(at: IndexSet(integer: index))
+                    vpn.removeServer(server.id, from: profileID)
                 }
             } label: {
                 Image(systemName: "ellipsis.circle")
@@ -830,10 +975,10 @@ private struct BrowserVPNSettingsPage: View {
             let scoped = url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
             guard let text = try? String(contentsOf: url, encoding: .utf8) else {
-                error = "Couldn't read \(url.lastPathComponent)."
+                error = "Couldn\u{2019}t read \(url.lastPathComponent)."
                 continue
             }
-            if let problem = vpn.addServer(name: url.deletingPathExtension().lastPathComponent, config: text) {
+            if let problem = vpn.addServer(to: profileID, name: url.deletingPathExtension().lastPathComponent, config: text) {
                 error = "\(url.lastPathComponent): \(problem)"
             }
         }
@@ -848,7 +993,7 @@ private struct BrowserVPNSettingsPage: View {
         let endpoint = text.split(separator: "\n")
             .first { $0.lowercased().hasPrefix("endpoint") }
             .map { $0.split(separator: "=").dropFirst().joined(separator: "=").trimmingCharacters(in: .whitespaces) }
-        error = vpn.addServer(name: endpoint ?? "Server \(vpn.servers.count + 1)", config: text)
+        error = vpn.addServer(to: profileID, name: endpoint ?? "Server \((profile?.servers.count ?? 0) + 1)", config: text)
     }
 }
 
