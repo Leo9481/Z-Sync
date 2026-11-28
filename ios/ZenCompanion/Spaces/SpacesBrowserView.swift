@@ -509,7 +509,9 @@ struct SpacesBrowserView: View {
             guard phase == .active else { return }
             openPages.closeExpired()
             Task { await model.sceneBecameActive() }
+            collectIncomingTabs()
         }
+        .task { collectIncomingTabs() }
         .onChange(of: model.searchOnOpenPending) { _, pending in
             guard pending else { return }
             // Leave an open browser or settings sheet where the user left it.
@@ -661,6 +663,23 @@ struct SpacesBrowserView: View {
         prepareOpenPages()
         openPages.resumeOrOpenBlank()
         show(BrowserTabSession(space: model.activeSpace))
+    }
+
+    /// Tabs other devices sent here, and links the share sheet could not hand
+    /// over directly: each opens as a new tab, the last one on screen.
+    private func collectIncomingTabs() {
+        Task {
+            var links: [(url: URL, title: String?)] = PendingOpens.take().map { ($0, nil) }
+            if let received = try? await SendTabService.shared.receive() {
+                links += received.map { ($0.url, $0.title.isEmpty ? nil : $0.title) }
+            }
+            guard let last = links.last else { return }
+            prepareOpenPages()
+            for link in links.dropLast() {
+                openPages.open(url: link.url, title: link.title)
+            }
+            presentBrowser(url: last.url, title: last.title, space: model.activeSpace)
+        }
     }
 
     private func openNewTab(in space: ZenSpace) {

@@ -331,6 +331,8 @@ struct OpenPagesOverview: View {
     @State private var driver = GridScrollDriver()
     /// The card lifted to be moved elsewhere in the grid.
     @State private var draggingID: String?
+    /// A page on its way to another device.
+    @State private var sendTarget: SendTabTarget?
 
     private enum DragAxis { case vertical, sideways, ignored }
 
@@ -379,6 +381,7 @@ struct OpenPagesOverview: View {
         .coordinateSpace(.named(Self.gridSpace))
         // Top to bottom like the page; see the page's own frame.
         .ignoresSafeArea(edges: .vertical)
+        .sheet(item: $sendTarget) { SendToDeviceSheet(target: $0) }
         .alert(
             Text("browser.pin_failed"),
             isPresented: Binding(get: { pinError != nil }, set: { if !$0 { pinError = nil } })
@@ -427,6 +430,10 @@ struct OpenPagesOverview: View {
                 onOpen(page)
             },
             onClose: { close($0) },
+            onSend: { page in
+                guard let url = page.url else { return }
+                sendTarget = SendTabTarget(url: url, title: page.title)
+            },
             onLift: { page in
                 driver.stop()
                 draggingID = page.id
@@ -760,6 +767,7 @@ private struct GridCards<Menu: View>: View, Equatable {
     let swipe: CGFloat
     let onOpen: (OpenPage) -> Void
     let onClose: (OpenPage) -> Void
+    let onSend: (OpenPage) -> Void
     let onLift: (OpenPage) -> NSItemProvider
     let drop: (OpenPage, CGFloat) -> CardDrop
     let menu: (OpenPage) -> Menu
@@ -822,6 +830,7 @@ private struct GridCards<Menu: View>: View, Equatable {
             isLifted: page.id == draggingID,
             onOpen: { onOpen(page) },
             onClose: { onClose(page) },
+            onSend: page.url == nil || page.model.isPrivate ? nil : { onSend(page) },
             onLift: { onLift(page) },
             drop: drop(page, resting.minY)
         ) {
@@ -914,6 +923,8 @@ private struct OpenPageCard<Menu: View>: View {
     let isLifted: Bool
     var onOpen: () -> Void
     var onClose: () -> Void
+    /// Send to another device; nil for a private page or one with no address.
+    var onSend: (() -> Void)?
     var onLift: () -> NSItemProvider
     let drop: CardDrop
     @ViewBuilder var menu: () -> Menu
@@ -1008,16 +1019,23 @@ private struct OpenPageCard<Menu: View>: View {
         .accessibilityLabel(Text("kept.close_page"))
     }
 
-    /// Send to desktop: wired up with the Send Tab milestone.
+    /// Send to another device on the Firefox account.
+    @ViewBuilder
     private var sendButton: some View {
-        Image(systemName: "laptopcomputer.and.arrow.down")
-            .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(.white.opacity(0.6))
-            .frame(width: 26, height: 24)
-            .background(Color.black.opacity(0.35), in: Capsule())
-            .padding(8)
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
+        if let onSend {
+            Button(action: onSend) {
+                Image(systemName: "laptopcomputer.and.arrow.down")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 26, height: 24)
+                    .background(Color.black.opacity(0.55), in: Capsule())
+                    // A bigger target than the capsule it draws.
+                    .padding(8)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text("Send to device"))
+        }
     }
 
     private var title: some View {

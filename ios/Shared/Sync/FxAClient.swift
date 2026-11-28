@@ -129,6 +129,17 @@ actor FxAClient {
         )
     }
 
+    /// An auth-server call signed with the session, for the device endpoints
+    /// Send Tab uses (`account/device`, `account/devices`, …). `path` may
+    /// carry a query. Returns the parsed JSON: an object or an array.
+    func deviceAPI(path: String, method: String, sessionTokenHex: String, json: [String: Any]? = nil) async throws -> Any {
+        let token = try FxACrypto.unhex(sessionTokenHex)
+        guard let url = URL(string: Self.authBase.absoluteString + "/" + path) else {
+            throw SyncError.auth("bad device path")
+        }
+        return try await hawkAny(url: url, method: method, token: token, tokenType: "sessionToken", json: json)
+    }
+
     private func hawkJSON(
         url: URL,
         method: String,
