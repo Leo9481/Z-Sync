@@ -1452,6 +1452,21 @@ private extension MiniBrowserView {
                 .zenFont(16, weight: .semibold, design: .rounded)
                 .foregroundStyle(.primary)
                 .lineLimit(2)
+
+            if let action = model.noticeActionTitle {
+                Spacer(minLength: 4)
+                Button {
+                    model.runNoticeAction()
+                } label: {
+                    Text(verbatim: action)
+                        .zenFont(15, weight: .bold, design: .rounded)
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .background(Color.primary.opacity(0.12), in: Capsule())
+                }
+                .buttonStyle(.plain)
+            }
         }
         .padding(.horizontal, 16)
         .frame(minHeight: 48)

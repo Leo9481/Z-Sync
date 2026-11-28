@@ -55,6 +55,11 @@ final class MiniBrowserWebDriver: NSObject, WKNavigationDelegate, WKUIDelegate {
     /// Weak: the model owns this driver and its web view.
     private weak var model: MiniBrowserModel?
     private var progressObservation: NSKeyValueObservation?
+    /// A page load (and its server redirects) is under way. Redirects while
+    /// a page loads are part of reaching it, never blocked.
+    private var navigationInFlight = false
+    /// When the page on screen finished loading.
+    private var pageFinishedAt: CFTimeInterval = 0
     private var loadingObservation: NSKeyValueObservation?
     private var urlObservation: NSKeyValueObservation?
     private var titleObservation: NSKeyValueObservation?
@@ -173,6 +178,15 @@ final class MiniBrowserWebDriver: NSObject, WKNavigationDelegate, WKUIDelegate {
         if let url, !BrowserNavigationPolicy.loadsInWebView(url) {
             // A popup aimed at an app: hand it over instead of dropping it.
             handOff(url)
+            return nil
+        }
+        if let url, PopupBlocking.blocksPopup(
+            linkTapped: navigationAction.navigationType == .linkActivated,
+            from: webView.url,
+            to: url,
+            sized: windowFeatures.width != nil || windowFeatures.height != nil
+        ) {
+            MainActor.assumeIsolated { model?.showBlockedNavigation(to: url, popup: true) }
             return nil
         }
         return MainActor.assumeIsolated {
@@ -397,6 +411,22 @@ final class MiniBrowserWebDriver: NSObject, WKNavigationDelegate, WKUIDelegate {
         // `<a download>`, `blob:` files included.
         if navigationAction.shouldPerformDownload {
             decisionHandler(.download, preferences)
+            return
+        }
+        if navigationAction.targetFrame?.isMainFrame ?? true,
+           navigationAction.navigationType == .other,
+           let url = navigationAction.request.url,
+           BrowserNavigationPolicy.loadsInWebView(url),
+           PopupBlocking.blocksRedirect(
+               from: webView.url,
+               to: url,
+               navigationInFlight: navigationInFlight,
+               pageFinishedAt: pageFinishedAt,
+               lastTouchAt: (webView as? MiniBrowserWebView)?.lastTouchAt ?? 0,
+               appLoadAt: MainActor.assumeIsolated { model?.appLoadAt ?? 0 }
+           ) {
+            MainActor.assumeIsolated { model?.showBlockedNavigation(to: url, popup: false) }
+            decisionHandler(.cancel, preferences)
             return
         }
         if navigationAction.targetFrame?.isMainFrame ?? true,
@@ -714,6 +744,7 @@ final class MiniBrowserWebDriver: NSObject, WKNavigationDelegate, WKUIDelegate {
     """
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        navigationInFlight = true
         DispatchQueue.main.async {
             self.model?.isLoading = true
         }
@@ -744,6 +775,8 @@ final class MiniBrowserWebDriver: NSObject, WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        navigationInFlight = false
+        pageFinishedAt = CACurrentMediaTime()
         // The reloaded document is laid out, but WebKit may still settle the
         // offset against the chrome's clearance; put the reader back after it.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
@@ -769,6 +802,7 @@ final class MiniBrowserWebDriver: NSObject, WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        navigationInFlight = false
         DispatchQueue.main.async {
             self.model?.isLoading = false
             self.finishRefresh()
@@ -778,6 +812,7 @@ final class MiniBrowserWebDriver: NSObject, WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        navigationInFlight = false
         DispatchQueue.main.async {
             self.model?.isLoading = false
             self.finishRefresh()
