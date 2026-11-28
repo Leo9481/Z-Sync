@@ -176,8 +176,9 @@ final class MiniBrowserWebDriver: NSObject, WKNavigationDelegate, WKUIDelegate {
         guard navigationAction.targetFrame == nil else { return nil }
         let url = navigationAction.request.url
         if let url, !BrowserNavigationPolicy.loadsInWebView(url) {
-            // A popup aimed at an app: hand it over instead of dropping it.
-            handOff(url)
+            // A popup aimed at an app never opens it by itself (ads do this
+            // to launch shopping apps): a notice offers it instead.
+            MainActor.assumeIsolated { model?.showBlockedAppLink(url) { [weak self] in self?.handOff(url) } }
             return nil
         }
         // An ad by the filter lists: refused whatever opened it, a sized
@@ -400,6 +401,11 @@ final class MiniBrowserWebDriver: NSObject, WKNavigationDelegate, WKUIDelegate {
     /// Offers a link to the app that owns its scheme. When nothing takes it
     /// the page stays where it is and the toast says why - silently doing
     /// nothing reads like a broken browser.
+    /// WebKit's "allow, but don't try to open an app for it" (Firefox for iOS
+    /// uses the same value). Not in the public enum; falls back to allow.
+    private static let allowWithoutAppLink =
+        WKNavigationActionPolicy(rawValue: WKNavigationActionPolicy.allow.rawValue + 2) ?? .allow
+
     private func handOff(_ url: URL) {
         ExternalBrowser.open(url) { [weak self] opened in
             guard !opened else { return }
@@ -455,7 +461,13 @@ final class MiniBrowserWebDriver: NSObject, WKNavigationDelegate, WKUIDelegate {
             MainActor.assumeIsolated { model?.prepareBlocking(for: url) }
         }
         guard let url = navigationAction.request.url, !BrowserNavigationPolicy.loadsInWebView(url) else {
-            decisionHandler(.allow, preferences)
+            // An app that claims the address (a universal link) opens only
+            // for a link the reader tapped in the page itself. Popups, redirects
+            // and anything a script starts load here instead.
+            let isMainFrame = navigationAction.targetFrame?.isMainFrame ?? true
+            let tapped = navigationAction.navigationType == .linkActivated && isMainFrame
+                && MainActor.assumeIsolated({ model?.popupOpenerHost == nil })
+            decisionHandler(tapped ? .allow : Self.allowWithoutAppLink, preferences)
             return
         }
         // Only a tap in the main frame may leave the app; a page that

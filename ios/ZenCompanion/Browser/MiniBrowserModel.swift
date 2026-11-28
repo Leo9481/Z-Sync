@@ -792,6 +792,12 @@ final class MiniBrowserModel {
     /// synced tab, an allowed redirect): never a redirect to block.
     @ObservationIgnored var appLoadAt: CFTimeInterval = 0
 
+    /// A popup that tried to open another app: a notice offers it instead.
+    func showBlockedAppLink(_ url: URL, open: @escaping () -> Void) {
+        let app = url.scheme.map { $0.prefix(1).uppercased() + $0.dropFirst() } ?? "an app"
+        showNotice("Blocked opening \(app)", symbol: "hand.raised.fill", actionTitle: "Open", action: open)
+    }
+
     /// A popup or redirect the page tried without a tap: a notice says so,
     /// with a button to go there after all.
     func showBlockedNavigation(to url: URL, popup: Bool) {
