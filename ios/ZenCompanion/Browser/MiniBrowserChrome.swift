@@ -1541,7 +1541,8 @@ struct MiniBrowserTopBar: View {
         } label: {
             Image(systemName: saved ? "cloud.fill" : "cloud")
                 .font(.system(size: Self.pillGlyphSize, weight: .semibold))
-                .foregroundStyle(ink.opacity(model.raindropSaving ? 0.35 : 0.85))
+                // Greyed like the other unavailable buttons on a private tab.
+                .foregroundStyle(ink.opacity(model.isPrivate ? 0.3 : model.raindropSaving ? 0.35 : 0.85))
                 .frame(width: Self.pillSlot, height: barHeight)
                 .contentShape(Rectangle())
         } primaryAction: {

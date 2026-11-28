@@ -91,7 +91,10 @@ enum RaindropAPI {
         async let children = request("collections/childrens")
         let items = ((try await roots)["items"] as? [[String: Any]] ?? [])
             + ((try await children)["items"] as? [[String: Any]] ?? [])
-        return items.compactMap { item in
+        // The nested list can repeat collections the root list has: each
+        // collection once, keeping the copy that says where it sits.
+        var seen = Set<Int>()
+        let parsed = items.compactMap { item -> RaindropCollection? in
             guard let id = (item["_id"] as? NSNumber)?.intValue else { return nil }
             let parent = ((item["parent"] as? [String: Any])?["$id"] as? NSNumber)?.intValue
             return RaindropCollection(
@@ -101,6 +104,14 @@ enum RaindropAPI {
                 parentID: parent
             )
         }
+        var chosen: [Int: RaindropCollection] = [:]
+        var order: [Int] = []
+        for collection in parsed {
+            if seen.insert(collection.id).inserted { order.append(collection.id) }
+            if let kept = chosen[collection.id], kept.parentID != nil { continue }
+            chosen[collection.id] = collection
+        }
+        return order.compactMap { chosen[$0] }
     }
 
     /// One page (50 at most) of a collection's bookmarks, newest first.
