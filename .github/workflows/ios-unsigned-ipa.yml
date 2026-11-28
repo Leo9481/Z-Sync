@@ -63,6 +63,20 @@ jobs:
           cp target/aarch64-apple-ios/release/libzb_adblock.a ../../ios/ZenCompanion/Vendor/adblock/
           ls -lh ../../ios/ZenCompanion/Vendor/adblock
 
+      - name: Build uBlock Origin scriptlets (GPLv3)
+        # From a pinned uBO release. A failure leaves scriptlets out of this
+        # build (with a warning) instead of failing it.
+        env:
+          UBO_VERSION: "1.77.4"
+        run: |
+          set -u
+          if git clone --quiet --depth 1 --branch "$UBO_VERSION" https://github.com/gorhill/uBlock.git "$RUNNER_TEMP/uBlock" && node ../scripts/build-scriptlets.mjs "$RUNNER_TEMP/uBlock" ZenCompanion/Vendor/scriptlets.json; then
+            ls -lh ZenCompanion/Vendor/scriptlets.json
+          else
+            echo "::warning::Could not build uBO scriptlets; building without them"
+            rm -f ZenCompanion/Vendor/scriptlets.json
+          fi
+
       - name: Fetch filter lists (uBlock Origin, Peter Lowe, HaGeZi)
         # Bundled so a fresh install blocks with them at once; the app
         # downloads newer copies weekly. A failed download leaves the list

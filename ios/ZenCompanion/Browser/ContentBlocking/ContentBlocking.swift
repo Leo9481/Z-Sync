@@ -391,7 +391,14 @@ final class ContentBlocker {
             .filter { $0.categories.contains(.ads) }
             .compactMap { texts[$0] }
             .joined(separator: "\n")
-        if !cosmetic.isEmpty { CosmeticEngine.shared.load(cosmetic) }
+        if !cosmetic.isEmpty {
+            // uBlock Origin's scriptlets, built by CI from a pinned release.
+            let scriptlets = await Task.detached(priority: .utility) {
+                Bundle.main.url(forResource: "scriptlets", withExtension: "json")
+                    .flatMap { try? String(contentsOf: $0, encoding: .utf8) }
+            }.value
+            CosmeticEngine.shared.load(cosmetic, resources: scriptlets)
+        }
 
         var compiled: [BlockCategory: [WKContentRuleList]] = [:]
         for category in [BlockCategory.ads, .trackers] {

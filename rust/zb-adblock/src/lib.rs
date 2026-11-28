@@ -11,6 +11,7 @@ use std::ffi::{c_char, CStr, CString};
 use std::ptr;
 
 use adblock::lists::{FilterSet, ParseOptions, RuleTypes};
+use adblock::resources::Resource;
 use adblock::Engine;
 
 pub struct ZbEngine(Engine);
@@ -38,6 +39,22 @@ pub extern "C" fn zb_engine_new(list_text: *const c_char) -> *mut ZbEngine {
         ParseOptions { rule_types: RuleTypes::CosmeticOnly, ..ParseOptions::default() },
     );
     Box::into_raw(Box::new(ZbEngine(Engine::new_with_filter_set(set))))
+}
+
+/// Gives the engine its scriptlet resources: a JSON array of adblock-rust
+/// `Resource`s (uBlock Origin's scriptlets, built by CI). Returns how many
+/// were loaded, or -1 if the JSON couldn't be read.
+#[no_mangle]
+pub extern "C" fn zb_engine_use_resources(engine: *mut ZbEngine, resources_json: *const c_char) -> i32 {
+    if engine.is_null() {
+        return -1;
+    }
+    let Some(json) = read(resources_json) else { return -1 };
+    let Ok(resources) = serde_json::from_str::<Vec<Resource>>(&json) else { return -1 };
+    let count = resources.len() as i32;
+    let engine = unsafe { &mut *engine };
+    engine.0.use_resources(resources);
+    count
 }
 
 #[no_mangle]

@@ -538,6 +538,7 @@ final class MiniBrowserModel {
     @ObservationIgnored private var appliedDesktopViewport = false
     /// Whether the scripts on the web view include website dark mode.
     @ObservationIgnored private var appliedDarkMode: Bool?
+    @ObservationIgnored private var appliedScriptlets: String?
     @ObservationIgnored let blocker: ContentBlocker
 
     /// Scroll offset captured when the reader asked for a reload.
@@ -1373,12 +1374,17 @@ final class MiniBrowserModel {
         // Sites with a dark look of their own show it, in private pages and
         // with dark mode for websites on.
         webView?.overrideUserInterfaceStyle = darkMode || isPrivate ? .dark : .unspecified
+        // The site's scriptlets (uBlock Origin's, by the ad lists): they
+        // differ from site to site, so a new site needs its own.
+        let scriptlets = cosmeticFilteringApplies ? host.flatMap { CosmeticEngine.shared.scriptlets(forHost: $0) } : nil
         guard configuration != appliedBlocking
             || requestsDesktopSite != appliedDesktopViewport
-            || darkMode != appliedDarkMode else { return }
+            || darkMode != appliedDarkMode
+            || scriptlets != appliedScriptlets else { return }
         appliedBlocking = configuration
         appliedDesktopViewport = requestsDesktopSite
         appliedDarkMode = darkMode
+        appliedScriptlets = scriptlets
         blocker.apply(configuration, to: controller)
         // `apply` clears every user script, this one included.
         BrowserGeolocation.addScript(to: controller)
@@ -1403,6 +1409,15 @@ final class MiniBrowserModel {
         if cosmeticFilteringApplies {
             CosmeticFilter.addScript(to: controller)
             BuiltInScriptlets.addScript(to: controller)
+        }
+        if let scriptlets {
+            // In the page's own world, before any of its scripts run.
+            controller.addUserScript(WKUserScript(
+                source: scriptlets,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true,
+                in: .page
+            ))
         }
     }
 
