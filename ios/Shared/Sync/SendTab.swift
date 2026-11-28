@@ -123,10 +123,11 @@ actor SendTabService {
     /// again each day, so the record keeps its keys and name.
     func registerIfNeeded() async throws {
         let account = try account()
-        var state = loadState() ?? State(
+        let fresh = State(
             privateKey: P256.KeyAgreement.PrivateKey().rawRepresentation,
             authSecret: try SyncCrypto.secureRandomBytes(16)
         )
+        var state = loadState() ?? fresh
         let session = Self.hash(account.sessionTokenHex)
         if state.sessionHash == session, state.deviceID != nil,
            let at = state.registeredAt, Date().timeIntervalSince(at) < 24 * 3600 {
