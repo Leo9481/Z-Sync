@@ -15,12 +15,21 @@ enum WebsiteDarkMode {
     private static let enabledKey = "websiteDarkMode.enabled"
     private static let offSitesKey = "websiteDarkMode.offSites"
 
-    /// The bundled library, or nil if the build did not include it.
-    private static let library: String? = Bundle.main
+    /// The bundled library, or nil if the build did not include it. Read once,
+    /// and early, away from the main thread: see `preload`.
+    private nonisolated static let library: String? = Bundle.main
         .url(forResource: "darkreader", withExtension: "js")
         .flatMap { try? String(contentsOf: $0, encoding: .utf8) }
 
-    static var isAvailable: Bool { library != nil }
+    /// Whether the build has the library, without reading it: the menu asks
+    /// this while it draws.
+    nonisolated static let isAvailable = Bundle.main.url(forResource: "darkreader", withExtension: "js") != nil
+
+    /// Reads the library and builds the script now, so the first page or
+    /// menu that needs them does not wait on the file. Call off the main thread.
+    nonisolated static func preload() {
+        _ = enableScript
+    }
 
     static var isEnabled: Bool {
         get { UserDefaults.standard.bool(forKey: enabledKey) }
@@ -46,9 +55,10 @@ enum WebsiteDarkMode {
 
     /// The library (once per document) and the call that turns it on. A page
     /// that already has it just turns it back on.
-    static var enableScript: String? {
+    /// Built once: the library is large, and every change of a page's
+    /// settings adds the script again.
+    nonisolated static let enableScript: String? =
         library.map { "if (!window.DarkReader) {\n" + $0 + "\n}\n" + bootstrap }
-    }
 
     static let disableScript = "if (window.DarkReader) { DarkReader.disable(); }"
 
@@ -77,7 +87,7 @@ enum WebsiteDarkMode {
     /// styles is not the same as using them (Wikipedia ships them but stays
     /// light unless its own setting says otherwise), and Dark Reader keeps
     /// an already dark page dark. "On for this site" covers the rest.
-    private static let bootstrap = """
+    private nonisolated static let bootstrap = """
     (function () {
       if (!window.DarkReader) { return; }
       try { DarkReader.setFetchMethod(window.fetch.bind(window)); } catch (e) {}

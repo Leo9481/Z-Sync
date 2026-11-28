@@ -100,7 +100,14 @@ struct MiniBrowserView: View {
     /// Set once the browser is closing, so a second tap cannot close it twice.
     @State private var leaving = false
     /// How far the address bar swipe has moved the page.
-    @State private var pageSwipe: CGFloat = 0
+    /// How far the page is swiped towards its neighbour. An object, read only
+    /// by the few views that move with it: the browser itself is not built
+    /// again on every frame of the finger. See `PageSwipeOffset`.
+    @State private var swipe = PageSwipeOffset()
+    private var pageSwipe: CGFloat {
+        get { swipe.x }
+        nonmutating set { swipe.x = newValue }
+    }
     @State private var paneWidth: CGFloat = 0
 
     init(
@@ -257,7 +264,7 @@ struct MiniBrowserView: View {
                         pages: pages,
                         addressEditing: addressEditing,
                         isAddressFocused: $isAddressFocused,
-                        swipeOffset: $pageSwipe,
+                        swipeOffset: Binding(get: { swipe.x }, set: { swipe.x = $0 }),
                         pageSpan: paneWidth + PageHostView.pageGap,
                         onBeginAddressEdit: beginAddressEditing,
                         onCancel: cancelAddressEditing,
@@ -360,7 +367,7 @@ struct MiniBrowserView: View {
                                 .onTapGesture { returnPage() }
                         }
                     }
-                    .offset(x: pageSwipe)
+                    .modifier(PageSwipeShift(swipe: swipe))
                     .scaleEffect(pagePose.scale, anchor: .bottom)
                     .offset(x: pagePose.x, y: pagePose.y)
 
@@ -470,9 +477,9 @@ struct MiniBrowserView: View {
             } message: {
                 Text("kept.close_all_message")
             }
-            .onChange(of: pageSwipe) { _, offset in
+            .modifier(PageSwipeWatch(swipe: swipe) { offset in
                 if offset < 0, pages.neighbours.next == nil, !revealingNewPage { revealingNewPage = true }
-            }
+            })
             .onChange(of: pages.activeID) { _, id in
                 guard id != nil else {
                     // The overview stays up empty, like Safari's. Anywhere
@@ -725,19 +732,13 @@ struct MiniBrowserView: View {
     /// be one. A blank sheet grows up out of the background as the finger
     /// pulls it in, the way Safari's does.
     private var newPagePeek: some View {
-        let span = paneWidth + PageHostView.pageGap
-        let progress = span > 0 ? min(1, max(0, -pageSwipe / span)) : 0
-        return ZStack {
-            Palette.background(scheme)
-                .ignoresSafeArea()
-            RoundedRectangle(cornerRadius: DisplayCorners.radius, style: .continuous)
-                .fill(defaultBackground)
-                .ignoresSafeArea()
-                .scaleEffect(0.9 + 0.1 * progress)
-                .offset(x: (1 - progress) * paneWidth * 0.3)
-                .opacity(0.45 + 0.55 * progress)
-        }
-        .allowsHitTesting(false)
+        NewPagePeek(
+            swipe: swipe,
+            span: paneWidth + PageHostView.pageGap,
+            paneWidth: paneWidth,
+            background: Palette.background(scheme),
+            sheet: defaultBackground
+        )
     }
 
     private func peek(_ page: OpenPage) -> PeekingPage {
@@ -1724,5 +1725,58 @@ private struct BrowserHistoryPresenter: ViewModifier {
             BrowserHistoryView(onOpen: onOpen)
                 .presentationDragIndicator(.visible)
         }
+    }
+}
+
+/// The swipe between pages, shared by the views that move with it.
+@MainActor
+@Observable
+final class PageSwipeOffset {
+    var x: CGFloat = 0
+}
+
+/// Moves the page with the swipe. Its own view, so a frame of the finger
+/// redraws this and not the browser around it.
+private struct PageSwipeShift: ViewModifier {
+    let swipe: PageSwipeOffset
+
+    func body(content: Content) -> some View {
+        content.offset(x: swipe.x)
+    }
+}
+
+/// Tells the browser how far the swipe is, from a view of its own.
+private struct PageSwipeWatch: ViewModifier {
+    let swipe: PageSwipeOffset
+    let action: (CGFloat) -> Void
+
+    func body(content: Content) -> some View {
+        content.onChange(of: swipe.x) { _, offset in action(offset) }
+    }
+}
+
+/// What waits past the last page: not a page yet, so it does not pretend to
+/// be one. A blank sheet grows up out of the background as the finger pulls
+/// it in, the way Safari's does.
+private struct NewPagePeek: View {
+    let swipe: PageSwipeOffset
+    let span: CGFloat
+    let paneWidth: CGFloat
+    let background: Color
+    let sheet: Color
+
+    var body: some View {
+        let progress = span > 0 ? min(1, max(0, -swipe.x / span)) : 0
+        ZStack {
+            background
+                .ignoresSafeArea()
+            RoundedRectangle(cornerRadius: DisplayCorners.radius, style: .continuous)
+                .fill(sheet)
+                .ignoresSafeArea()
+                .scaleEffect(0.9 + 0.1 * progress)
+                .offset(x: (1 - progress) * paneWidth * 0.3)
+                .opacity(0.45 + 0.55 * progress)
+        }
+        .allowsHitTesting(false)
     }
 }

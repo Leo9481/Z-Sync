@@ -523,6 +523,10 @@ final class MiniBrowserModel {
     var translationJob: PageTranslationJob?
     /// Text the translated page adds later, on its way to the open session.
     @ObservationIgnored var translationFeed: AsyncStream<PageTextBatch>.Continuation?
+    /// Text already translated in this job, by its original: a feed adds the
+    /// same labels ("Reply", "Like") over and over, and each is asked for once.
+    @ObservationIgnored var translationMemo: [String: String] = [:]
+    @ObservationIgnored var translationMemoJob: UUID?
     /// Automatic translation looked at this document already.
     @ObservationIgnored var autoTranslateChecked = false
     @ObservationIgnored private var originalPage: URL?
