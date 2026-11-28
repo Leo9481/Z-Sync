@@ -11,7 +11,7 @@ use std::ffi::{c_char, CStr, CString};
 use std::ptr;
 
 use adblock::lists::{FilterSet, ParseOptions, RuleTypes};
-use adblock::resources::Resource;
+use adblock::resources::{PermissionMask, Resource};
 use adblock::Engine;
 
 pub struct ZbEngine(Engine);
@@ -28,12 +28,22 @@ fn give(text: String) -> *mut c_char {
     CString::new(text.replace('\0', "")).map(CString::into_raw).unwrap_or(ptr::null_mut())
 }
 
-/// An engine with the cosmetic rules of `list_text` (one or more filter
-/// lists, joined by newlines). Null if the text is null.
+/// An engine with the cosmetic rules of two sets of filter lists (each joined
+/// by newlines): `trusted_text` (uBlock Origin's own lists, which uBO trusts,
+/// so their rules may use its trusted scriptlets) and `list_text` (the rest).
+/// Null if `list_text` is null; `trusted_text` may be null.
 #[no_mangle]
-pub extern "C" fn zb_engine_new(list_text: *const c_char) -> *mut ZbEngine {
+pub extern "C" fn zb_engine_new(trusted_text: *const c_char, list_text: *const c_char) -> *mut ZbEngine {
     let Some(text) = read(list_text) else { return ptr::null_mut() };
     let mut set = FilterSet::new(false);
+    if let Some(trusted) = read(trusted_text) {
+        // Bit 0: uBO's trusted resources (built with permission 1).
+        let permissions: PermissionMask = serde_json::from_str("1").unwrap_or_default();
+        set.add_filter_list(
+            trusted,
+            ParseOptions { rule_types: RuleTypes::CosmeticOnly, permissions, ..ParseOptions::default() },
+        );
+    }
     set.add_filter_list(
         text,
         ParseOptions { rule_types: RuleTypes::CosmeticOnly, ..ParseOptions::default() },

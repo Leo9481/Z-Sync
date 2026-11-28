@@ -164,9 +164,12 @@ final class CosmeticEngine: @unchecked Sendable {
     /// newlines) and given `resources` (uBO's scriptlets, a JSON array). Built
     /// off the queue and swapped in at the end, so a page asking for its
     /// scriptlets never waits behind a rebuild.
-    func load(_ listText: String, resources: String?) {
+    func load(trusted: String, _ listText: String, resources: String?) {
         DispatchQueue.global(qos: .utility).async {
-            guard let built = listText.withCString({ zb_engine_new($0) }) else { return }
+            let made = trusted.withCString { trustedText in
+                listText.withCString { zb_engine_new(trusted.isEmpty ? nil : trustedText, $0) }
+            }
+            guard let built = made else { return }
             if let resources {
                 let count = resources.withCString { zb_engine_use_resources(built, $0) }
                 if count < 0 { NSLog("Cosmetic engine: scriptlet resources unreadable") }
