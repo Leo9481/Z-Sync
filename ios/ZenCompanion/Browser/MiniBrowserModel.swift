@@ -775,7 +775,27 @@ final class MiniBrowserModel {
             urlOpener.open(url)
             return
         }
+        appLoadAt = CACurrentMediaTime()
         webView?.load(URLRequest(url: url))
+    }
+
+    /// When the app itself last sent the page somewhere (the address bar, a
+    /// synced tab, an allowed redirect): never a redirect to block.
+    @ObservationIgnored var appLoadAt: CFTimeInterval = 0
+
+    /// A popup or redirect the page tried without a tap: a notice says so,
+    /// with a button to go there after all.
+    func showBlockedNavigation(to url: URL, popup: Bool) {
+        let site = url.host.map { $0.hasPrefix("www.") ? String($0.dropFirst(4)) : $0 } ?? url.absoluteString
+        let text = popup ? "Popup blocked · \(site)" : "Redirect blocked · \(site)"
+        showNotice(text, symbol: "hand.raised.fill", actionTitle: "Open") { [weak self] in
+            guard let self else { return }
+            if popup {
+                self.host?.openInNewPage(url, from: self)
+            } else {
+                self.load(url: url)
+            }
+        }
     }
 
     func reload(fromTop: Bool = false) {
@@ -1540,7 +1560,30 @@ final class MiniBrowserModel {
         showPinNotice(text, symbol: symbol)
     }
 
+    /// A notice with a button: it stays a little longer, to give time to tap.
+    func showNotice(_ text: String, symbol: String, actionTitle: String, action: @escaping () -> Void) {
+        showPinNotice(text, symbol: symbol, duration: 6.0)
+        noticeActionTitle = actionTitle
+        noticeAction = action
+    }
+
+    /// The notice's button, if it has one.
+    private(set) var noticeActionTitle: String?
+    @ObservationIgnored private var noticeAction: (() -> Void)?
+
+    func runNoticeAction() {
+        let action = noticeAction
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+            pinNotice = nil
+            noticeActionTitle = nil
+        }
+        noticeAction = nil
+        action?()
+    }
+
     private func showPinNotice(_ text: String, symbol: String = "pin.slash.fill", duration: TimeInterval = 4.0) {
+        noticeActionTitle = nil
+        noticeAction = nil
         pinNotice = text
         pinNoticeSymbol = symbol
         pinNoticeDismissTask?.cancel()

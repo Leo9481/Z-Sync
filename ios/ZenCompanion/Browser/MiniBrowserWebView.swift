@@ -17,6 +17,16 @@ import UIKit
 /// (arrows plus Done) so it cannot stack under the floating toolbar.
 @MainActor
 final class MiniBrowserWebView: WKWebView {
+    /// When a finger last came down on the page. A page that sends you
+    /// elsewhere right after a touch is answering it; one that does so on its
+    /// own is not (see `PopupBlocking`).
+    private(set) var lastTouchAt: CFTimeInterval = 0
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        if event?.type == .touches { lastTouchAt = CACurrentMediaTime() }
+        return super.hitTest(point, with: event)
+    }
+
     /// How far the page's layout viewport is pushed up from the bottom. Zero
     /// while the bar is tucked away, so the page uses the full height again.
     private(set) var bottomClearance: CGFloat = 0
