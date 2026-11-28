@@ -782,10 +782,12 @@ private struct RaindropSettingsPage: View {
                 .liftCard(scheme)
 
                 SettingsSection(title: "How to get a test token", scheme: scheme) {
-                    Text(verbatim: "1. On raindrop.io, open Settings → Integrations.
-2. Under For Developers, create a new app (any name).
-3. Open the app and tap Create test token.
-4. Copy the token and paste it above.")
+                    Text(verbatim: """
+                        1. On raindrop.io, open Settings → Integrations.
+                        2. Under For Developers, create a new app (any name).
+                        3. Open the app and tap Create test token.
+                        4. Copy the token and paste it above.
+                        """)
                         .zenFont(15, design: .rounded)
                         .foregroundStyle(Palette.ink(scheme).opacity(0.75))
                         .frame(maxWidth: .infinity, alignment: .leading)
