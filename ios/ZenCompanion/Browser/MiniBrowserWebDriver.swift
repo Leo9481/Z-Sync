@@ -240,7 +240,22 @@ final class MiniBrowserWebDriver: NSObject, WKNavigationDelegate, WKUIDelegate {
                     model.host?.openInNewPage(url, from: model)
                 }
             }
-            return UIMenu(children: [open] + suggested)
+            // Pages never open apps by themselves (see `decidePolicyFor`), so
+            // the reader can ask for the app here: iOS opens the link only in
+            // an app that claims it.
+            var actions = [open]
+            if ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
+                actions.append(UIAction(
+                    title: String(localized: "Open in App"),
+                    image: UIImage(systemName: "arrow.up.forward.app")
+                ) { _ in
+                    UIApplication.shared.open(url, options: [.universalLinksOnly: true]) { opened in
+                        guard !opened else { return }
+                        MainActor.assumeIsolated { self?.model?.showNotice("No app opens this link", symbol: "arrow.up.forward.app") }
+                    }
+                })
+            }
+            return UIMenu(children: actions + suggested)
         })
     }
 
