@@ -21,4 +21,6 @@ char * _Nullable zb_engine_hidden_selectors(const ZbEngine * _Nonnull engine, co
 
 void zb_string_free(char * _Nullable text);
 
+#include "../VPN/ZBWireGuard.h"
+
 #endif

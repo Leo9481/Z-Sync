@@ -1,4 +1,6 @@
 import SwiftUI
+import UIKit
+import UniformTypeIdentifiers
 
 // MARK: - Settings sheet
 
@@ -327,6 +329,21 @@ struct SettingsSheet: View {
                     SettingsRow(
                         title: "Raindrop",
                         systemImage: "cloud",
+                        scheme: scheme
+                    ) {
+                        SettingsChevron(scheme: scheme)
+                    }
+                }
+                .buttonStyle(PressedButtonStyle())
+
+                SettingsHairline(scheme: scheme)
+
+                NavigationLink {
+                    BrowserVPNSettingsPage(scheme: scheme)
+                } label: {
+                    SettingsRow(
+                        title: "Browser VPN",
+                        systemImage: "lock.shield",
                         scheme: scheme
                     ) {
                         SettingsChevron(scheme: scheme)
@@ -690,6 +707,148 @@ private struct PrivacySettingsPage: View {
         } message: {
             Text("settings.clear_website_data.message")
         }
+    }
+}
+
+/// The browser-only VPN: on/off, its state, and the WireGuard servers in the
+/// order they're tried.
+private struct BrowserVPNSettingsPage: View {
+    let scheme: ColorScheme
+
+    @Bindable private var vpn = BrowserVPN.shared
+    @State private var importing = false
+    @State private var error: String?
+
+    var body: some View {
+        SettingsSubpage(title: "Browser VPN", scheme: scheme) {
+            VStack(spacing: 0) {
+                SettingsToggleRow(
+                    title: "Browser VPN",
+                    systemImage: "lock.shield",
+                    scheme: scheme,
+                    subtitle: LocalizedStringKey(statusText),
+                    isOn: Binding(get: { vpn.isEnabled }, set: { vpn.isEnabled = $0 })
+                )
+                .disabled(vpn.servers.isEmpty)
+            }
+            .liftCard(scheme)
+
+            SettingsSection(title: "Servers, in the order they're tried", scheme: scheme) {
+                VStack(spacing: 0) {
+                    ForEach(Array(vpn.servers.enumerated()), id: \.element.id) { index, server in
+                        if index > 0 { SettingsHairline(scheme: scheme) }
+                        serverRow(server, index: index)
+                    }
+                    if vpn.servers.isEmpty {
+                        Text(verbatim: "No servers yet. Add Proton VPN's WireGuard configs (.conf files from account.protonvpn.com → Downloads → WireGuard).")
+                            .zenFont(14, design: .rounded)
+                            .foregroundStyle(Palette.ink(scheme).opacity(0.65))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(16)
+                    }
+                }
+                .liftCard(scheme)
+            }
+
+            VStack(spacing: 0) {
+                Button { importing = true } label: {
+                    SettingsRow(title: "Add from Files", systemImage: "doc.badge.plus", scheme: scheme) { EmptyView() }
+                }
+                .buttonStyle(PressedButtonStyle())
+                SettingsHairline(scheme: scheme)
+                Button { pasteConfig() } label: {
+                    SettingsRow(title: "Paste a config", systemImage: "doc.on.clipboard", scheme: scheme) { EmptyView() }
+                }
+                .buttonStyle(PressedButtonStyle())
+            }
+            .liftCard(scheme)
+
+            if let error {
+                Text(verbatim: error)
+                    .zenFont(14, design: .rounded)
+                    .foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            Text(verbatim: "Only Z-Browser's pages go through the VPN; the rest of the phone doesn't. If a server stops answering, the next one takes over. If none answers, the VPN turns off and tells you. The configs stay on this phone, in the Keychain.")
+                .zenFont(13, design: .rounded)
+                .foregroundStyle(Palette.ink(scheme).opacity(0.55))
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .fileImporter(isPresented: $importing, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+            importFiles(result)
+        }
+    }
+
+    private var statusText: String {
+        if vpn.servers.isEmpty { return "Add a server first" }
+        switch vpn.status {
+        case .off: return vpn.isEnabled ? "Starting…" : "Off"
+        case .connecting(let name): return "Connecting to \(name)…"
+        case .connected(let name): return "Connected via \(name)"
+        }
+    }
+
+    private func serverRow(_ server: BrowserVPN.Server, index: Int) -> some View {
+        HStack(spacing: 12) {
+            Text(verbatim: "\(index + 1)")
+                .zenFont(15, weight: .semibold, design: .rounded)
+                .foregroundStyle(Palette.ink(scheme).opacity(0.5))
+                .frame(width: 22)
+            Text(verbatim: server.name)
+                .zenFont(16, design: .rounded)
+                .foregroundStyle(Palette.ink(scheme))
+                .lineLimit(1)
+            Spacer()
+            Menu {
+                Button("Move up", systemImage: "arrow.up") {
+                    vpn.moveServers(from: IndexSet(integer: index), to: index - 1)
+                }
+                .disabled(index == 0)
+                Button("Move down", systemImage: "arrow.down") {
+                    vpn.moveServers(from: IndexSet(integer: index), to: index + 2)
+                }
+                .disabled(index == vpn.servers.count - 1)
+                Button("Delete", systemImage: "trash", role: .destructive) {
+                    vpn.removeServers(at: IndexSet(integer: index))
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.system(size: 18))
+                    .foregroundStyle(Palette.ink(scheme).opacity(0.6))
+                    .frame(width: 36, height: 36)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+    }
+
+    private func importFiles(_ result: Result<[URL], Error>) {
+        error = nil
+        guard case .success(let urls) = result else { return }
+        for url in urls {
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+                error = "Couldn't read \(url.lastPathComponent)."
+                continue
+            }
+            if let problem = vpn.addServer(name: url.deletingPathExtension().lastPathComponent, config: text) {
+                error = "\(url.lastPathComponent): \(problem)"
+            }
+        }
+    }
+
+    private func pasteConfig() {
+        error = nil
+        guard let text = UIPasteboard.general.string else {
+            error = "The clipboard is empty."
+            return
+        }
+        let endpoint = text.split(separator: "\n")
+            .first { $0.lowercased().hasPrefix("endpoint") }
+            .map { $0.split(separator: "=").dropFirst().joined(separator: "=").trimmingCharacters(in: .whitespaces) }
+        error = vpn.addServer(name: endpoint ?? "Server \(vpn.servers.count + 1)", config: text)
     }
 }
 

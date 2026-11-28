@@ -37,3 +37,7 @@ ios/ZenCompanion/Vendor/
 
 # Rust build output (the ad-block engine is built by CI)
 rust/zb-adblock/target/
+
+# VPN engine build output (built by CI)
+go/zbwg/libzbwg.a
+go/zbwg/libzbwg.h

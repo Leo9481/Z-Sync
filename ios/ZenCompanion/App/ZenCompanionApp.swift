@@ -13,6 +13,8 @@ struct ZenCompanionApp: App {
             HomeView()
                 // Loads the switches and lists, and starts the weekly download.
                 .task { ContentBlocker.shared.start() }
+                // The browser VPN, if it was left on.
+                .task { BrowserVPN.shared.start() }
                 // Dark Reader is large: read it while the first page loads.
                 .task { await Task.detached(priority: .utility) { WebsiteDarkMode.preload() }.value }
         }

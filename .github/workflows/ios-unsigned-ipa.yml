@@ -63,6 +63,28 @@ jobs:
           cp target/aarch64-apple-ios/release/libzb_adblock.a ../../ios/ZenCompanion/Vendor/adblock/
           ls -lh ../../ios/ZenCompanion/Vendor/adblock
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+          cache: false
+
+      - name: Build the VPN engine (wireguard-go, MIT)
+        working-directory: go/zbwg
+        run: |
+          set -euo pipefail
+          # go.sum from the pinned versions in go.mod.
+          go mod tidy
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          export CGO_ENABLED=1 GOOS=ios GOARCH=arm64
+          export CC="$(xcrun --sdk iphoneos -f clang)"
+          export CGO_CFLAGS="-isysroot $SDK -arch arm64 -miphoneos-version-min=17.0"
+          export CGO_LDFLAGS="$CGO_CFLAGS"
+          go build -trimpath -ldflags=-w -buildmode=c-archive -o libzbwg.a .
+          mkdir -p ../../ios/ZenCompanion/Vendor/wireguard
+          cp libzbwg.a ../../ios/ZenCompanion/Vendor/wireguard/
+          ls -lh ../../ios/ZenCompanion/Vendor/wireguard
+
       - name: Build uBlock Origin scriptlets (GPLv3)
         # From a pinned uBO release. A failure leaves scriptlets out of this
         # build (with a warning) instead of failing it.
