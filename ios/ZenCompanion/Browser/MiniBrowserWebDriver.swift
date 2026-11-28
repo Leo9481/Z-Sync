@@ -791,6 +791,7 @@ final class MiniBrowserWebDriver: NSObject, WKNavigationDelegate, WKUIDelegate {
             self.finishRefresh()
             self.model?.updateCurrentURL(webView.url)
             if let model = self.model { model.host?.pageDidFinishLoading(model) }
+            self.model?.checkRaindrop()
             self.model?.adoptPageTitle(webView.title ?? "")
             self.model?.recordVisit()
             // Settings → Translation → Translate automatically.

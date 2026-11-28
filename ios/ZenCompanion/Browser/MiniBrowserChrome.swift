@@ -88,6 +88,8 @@ struct MiniBrowserChrome<NavBar: View>: View {
     var onDone: () -> Void = {}
     /// The app's settings, the same sheet as the sidebar's gear.
     var onOpenSettings: () -> Void = {}
+    /// Raindrop bookmarks.
+    var onOpenBookmarks: () -> Void = {}
     /// The Private | Tabs switch: true for the private section.
     var onSwitchSection: (Bool) -> Void = { _ in }
     /// The navigation bar. It stays in place while the menu grows above it.
@@ -333,8 +335,7 @@ struct MiniBrowserChrome<NavBar: View>: View {
         HStack(spacing: 10) {
             overviewCircle(systemName: "sidebar.left", label: "Sidebar", action: onClose)
             overviewCircle(systemName: "gearshape", label: "Settings", action: onOpenSettings)
-            // Raindrop bookmarks: wired up with the Raindrop milestone.
-            overviewCircle(systemName: "cloud", label: "Raindrop bookmarks", enabled: false) {}
+            overviewCircle(systemName: "cloud", label: "Raindrop bookmarks", action: onOpenBookmarks)
             Spacer(minLength: 0)
             newPageButton
             Button(action: onDone) {
@@ -1512,8 +1513,7 @@ struct MiniBrowserTopBar: View {
                 Text(displayTitle.isEmpty ? String(localized: "browser.search_placeholder") : displayTitle)
             )
 
-            // Raindrop quick bookmark: wired up with the Raindrop milestone.
-            pillButton(systemName: "cloud", verbatimLabel: "Bookmark to Raindrop", enabled: false) {}
+            raindropButton
 
             pillButton(
                 systemName: model.isLoading ? "xmark" : "arrow.clockwise",
@@ -1521,6 +1521,39 @@ struct MiniBrowserTopBar: View {
             ) {
                 if model.isLoading { model.stopLoading() } else { model.reload() }
             }
+        }
+    }
+
+    /// ☁: a tap saves the page to the chosen collection (or takes it out
+    /// again); a long press picks the collection.
+    private var raindropButton: some View {
+        let raindrop = RaindropSettings.shared
+        let saved = model.raindropID != nil
+        return Menu {
+            Section("Save to") {
+                Button("Unsorted") { model.saveToRaindrop(collection: RaindropCollection.unsorted) }
+                ForEach(raindrop.collectionTree) { entry in
+                    Button(String(repeating: "   ", count: entry.depth) + entry.collection.title) {
+                        model.saveToRaindrop(collection: entry.collection.id)
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: saved ? "cloud.fill" : "cloud")
+                .font(.system(size: Self.pillGlyphSize, weight: .semibold))
+                .foregroundStyle(ink.opacity(model.raindropSaving ? 0.35 : 0.85))
+                .frame(width: Self.pillSlot, height: barHeight)
+                .contentShape(Rectangle())
+        } primaryAction: {
+            model.toggleRaindrop()
+        }
+        .menuStyle(.button)
+        .buttonStyle(GlyphPressStyle())
+        .disabled(model.isPrivate)
+        .accessibilityLabel(Text(verbatim: saved ? "Remove from Raindrop" : "Save to Raindrop"))
+        // The collections for the menu, once: Raindrop counts every request.
+        .task(id: raindrop.isConnected) {
+            if raindrop.collections.isEmpty { await raindrop.refreshCollections() }
         }
     }
 
