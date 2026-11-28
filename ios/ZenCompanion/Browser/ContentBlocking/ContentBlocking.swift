@@ -281,7 +281,7 @@ final class ContentBlocker {
         if original { return BlockingConfiguration(ruleLists: [], consentSkip: nil) }
         let wanted = [BlockCategory.ads, .trackers]
             .filter { settings.isOn($0, host: host) }
-            .flatMap { (ruleLists[$0] ?? []).map(\.identifier) }
+            .flatMap { (ruleLists[$0] ?? []).compactMap(\.identifier) }
         let skip = settings.isOn(.cookieBanners) && consentBundle != nil ? settings.cookieBannerSitesOff : nil
         return BlockingConfiguration(ruleLists: wanted, consentSkip: skip)
     }
@@ -328,7 +328,7 @@ final class ContentBlocker {
             compiled[category] = await Self.ruleLists(for: category, sources)
         }
         ruleLists = compiled
-        await Self.removeStaleRuleLists(keeping: Set(compiled.values.joined().map(\.identifier)))
+        await Self.removeStaleRuleLists(keeping: Set(compiled.values.joined().compactMap(\.identifier)))
     }
 
     /// One list's text and domain rules, on its way to a compiled list.
