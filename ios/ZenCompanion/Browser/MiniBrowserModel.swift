@@ -779,6 +779,10 @@ final class MiniBrowserModel {
         webView?.load(URLRequest(url: url))
     }
 
+    /// Set while this page is a popup whose first page hasn't shown yet: the
+    /// host of the page that opened it ("" when unknown). See `PopupBlocking`.
+    @ObservationIgnored var popupOpenerHost: String?
+
     /// The page's bookmark in Raindrop, if it is saved there.
     var raindropID: Int?
     var raindropSaving = false
@@ -787,6 +791,21 @@ final class MiniBrowserModel {
     /// When the app itself last sent the page somewhere (the address bar, a
     /// synced tab, an allowed redirect): never a redirect to block.
     @ObservationIgnored var appLoadAt: CFTimeInterval = 0
+
+    /// A link to another app: the small notice asks, and fades if ignored.
+    func offerAppLink(_ url: URL, open: @escaping () -> Void) {
+        showNotice("Open in \(Self.appName(for: url))?", symbol: "arrow.up.forward.app", actionTitle: "Open", action: open)
+    }
+
+    /// A readable name for the app a link points to, from its scheme.
+    private static func appName(for url: URL) -> String {
+        guard let scheme = url.scheme?.lowercased() else { return "app" }
+        if scheme.hasPrefix("itms") { return "App Store" }
+        let known = ["fb": "Facebook", "instagram": "Instagram", "youtube": "YouTube", "twitter": "X", "whatsapp": "WhatsApp",
+                     "tg": "Telegram", "spotify": "Spotify", "maps": "Maps", "comgooglemaps": "Google Maps"]
+        if let name = known[scheme] { return name }
+        return scheme.prefix(1).uppercased() + scheme.dropFirst()
+    }
 
     /// A popup or redirect the page tried without a tap: a notice says so,
     /// with a button to go there after all.

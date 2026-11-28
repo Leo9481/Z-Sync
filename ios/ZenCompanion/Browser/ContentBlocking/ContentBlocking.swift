@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Observation
 import WebKit
@@ -91,20 +92,50 @@ enum BlockingCard: Equatable {
 enum FilterList: String, CaseIterable, Sendable {
     case easylist
     case easyprivacy
+    // uBlock Origin's own lists (uBlockOrigin/uAssets, GPLv3), meant to be
+    // used along EasyList and EasyPrivacy. Fetched by CI at build time and
+    // weekly by the app; a build without them still blocks with the two above.
+    case ublockFilters = "ublock-filters"
+    case ublockBadware = "ublock-badware"
+    case ublockQuickFixes = "ublock-quick-fixes"
+    case ublockPrivacy = "ublock-privacy"
+    case ublockUnbreak = "ublock-unbreak"
+    // Domain lists, as uBlock Origin and DNS blockers use them: hosts of ad
+    // networks, trackers and device telemetry the lists above leave out.
+    // Peter Lowe's list is on by default in uBlock Origin; HaGeZi's Multi
+    // LIGHT (GPLv3) is the low-breakage edition, built only from domains
+    // seen on top-1M lists.
+    case peterLowe = "peter-lowe"
+    case hageziLight = "hagezi-light"
 
     var url: URL {
         switch self {
         case .easylist: return URL(string: "https://easylist.to/easylist/easylist.txt")!
         case .easyprivacy: return URL(string: "https://easylist.to/easylist/easyprivacy.txt")!
+        case .ublockFilters: return URL(string: "https://ublockorigin.github.io/uAssets/filters/filters.txt")!
+        case .ublockBadware: return URL(string: "https://ublockorigin.github.io/uAssets/filters/badware.txt")!
+        case .ublockQuickFixes: return URL(string: "https://ublockorigin.github.io/uAssets/filters/quick-fixes.txt")!
+        case .ublockPrivacy: return URL(string: "https://ublockorigin.github.io/uAssets/filters/privacy.txt")!
+        case .ublockUnbreak: return URL(string: "https://ublockorigin.github.io/uAssets/filters/unbreak.txt")!
+        case .peterLowe: return URL(string: "https://pgl.yoyo.org/adservers/serverlist.php?hostformat=adblockplus&showintro=0&mimetype=plaintext")!
+        case .hageziLight: return URL(string: "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/light.txt")!
         }
     }
 
-    var category: BlockCategory {
+    /// The switches the list belongs to. Unbreak holds exceptions for both,
+    /// and an exception only undoes rules in the same compiled list.
+    var categories: [BlockCategory] {
         switch self {
-        case .easylist: return .ads
-        case .easyprivacy: return .trackers
+        case .easylist, .ublockFilters, .ublockBadware, .ublockQuickFixes, .peterLowe: return [.ads]
+        // Mostly trackers and telemetry, and the Trackers list has the room.
+        case .easyprivacy, .ublockPrivacy, .hageziLight: return [.trackers]
+        case .ublockUnbreak: return [.ads, .trackers]
         }
     }
+
+    /// Lists made mostly of domain rules, checked by how many they hold; uBO's
+    /// lists are mostly patterns and exceptions, so they are checked by size.
+    var isDomainList: Bool { [.easylist, .easyprivacy, .peterLowe, .hageziLight].contains(self) }
 }
 
 /// When to download fresh lists, and which downloads to trust.
@@ -119,6 +150,15 @@ enum FilterListUpdates {
     static func isDue(lastUpdate: Date?, now: Date) -> Bool {
         guard let lastUpdate else { return true }
         return now.timeIntervalSince(lastUpdate) >= interval || lastUpdate > now
+    }
+
+    /// The text, when it is a usable copy of `list`.
+    static func accept(_ text: String, for list: FilterList) -> String? {
+        if list.isDomainList { return accept(text) != nil ? text : nil }
+        // uBO's lists open with their title; a broken server sends a page.
+        guard text.hasPrefix("! Title:") || text.hasPrefix("[Adblock") else { return nil }
+        let rules = text.split(separator: "\n").filter { !$0.hasPrefix("!") }.count
+        return rules >= 20 ? text : nil
     }
 
     /// The parsed list, or nil when the download isn't a usable filter list.
@@ -191,8 +231,8 @@ final class ContentBlocker {
     /// The ad list's own date, for the caption in Settings.
     private(set) var lastModified: String?
 
-    @ObservationIgnored private var lists: [BlockCategory: BlockList] = [:]
-    @ObservationIgnored private var ruleLists: [BlockCategory: WKContentRuleList] = [:]
+    @ObservationIgnored private var lists: [FilterList: BlockList] = [:]
+    @ObservationIgnored private var ruleLists: [BlockCategory: [WKContentRuleList]] = [:]
     @ObservationIgnored private var consentBundle: String?
     @ObservationIgnored private let preferences: PreferencesStoring
     @ObservationIgnored private var started = false
@@ -241,7 +281,18 @@ final class ContentBlocker {
     func blocks(_ url: URL, pageHost: String?) -> Bool {
         guard let host = url.host, ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return false }
         return lists.contains { entry in
-            settings.isOn(entry.key, host: pageHost) && entry.value.blocks(requestHost: host, pageHost: pageHost)
+            entry.key.categories.contains { settings.isOn($0, host: pageHost) }
+                && entry.value.blocks(requestHost: host, pageHost: pageHost)
+        }
+    }
+
+    /// True when a new window to `url`, opened by a page on `openerHost`, is
+    /// an ad by the lists of a switch that is on for that page.
+    func blocksPopup(_ url: URL, openerHost: String?) -> Bool {
+        guard let host = url.host, ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return false }
+        return lists.contains { entry in
+            entry.key.categories.contains { settings.isOn($0, host: openerHost) }
+                && entry.value.blocksPopup(host: host, openerHost: openerHost)
         }
     }
 
@@ -250,7 +301,7 @@ final class ContentBlocker {
         if original { return BlockingConfiguration(ruleLists: [], consentSkip: nil) }
         let wanted = [BlockCategory.ads, .trackers]
             .filter { settings.isOn($0, host: host) }
-            .compactMap { ruleLists[$0]?.identifier }
+            .flatMap { (ruleLists[$0] ?? []).compactMap(\.identifier) }
         let skip = settings.isOn(.cookieBanners) && consentBundle != nil ? settings.cookieBannerSitesOff : nil
         return BlockingConfiguration(ruleLists: wanted, consentSkip: skip)
     }
@@ -259,7 +310,7 @@ final class ContentBlocker {
     /// adds its own scripts afterwards, because this clears them.
     func apply(_ configuration: BlockingConfiguration, to controller: WKUserContentController) {
         controller.removeAllContentRuleLists()
-        for list in ruleLists.values where configuration.ruleLists.contains(list.identifier) {
+        for list in ruleLists.values.joined() where configuration.ruleLists.contains(list.identifier) {
             controller.add(list)
         }
         controller.removeAllUserScripts()
@@ -276,63 +327,154 @@ final class ContentBlocker {
     // MARK: - Lists
 
     private func loadLists() async {
-        var loaded: [BlockCategory: BlockList] = [:]
-        var compiled: [BlockCategory: WKContentRuleList] = [:]
+        // Each list's text (the copy to use) and its domain rules.
+        var texts: [FilterList: String] = [:]
+        var loaded: [FilterList: BlockList] = [:]
         for list in FilterList.allCases {
-            guard let parsed = await Task.detached(priority: .utility, operation: { Self.readList(list) }).value else { continue }
-            loaded[list.category] = parsed
-            if let ruleList = await Self.ruleList(for: list, parsed) {
-                compiled[list.category] = ruleList
-            }
+            guard let read = await Task.detached(priority: .utility, operation: { Self.readList(list) }).value else { continue }
+            texts[list] = read.text
+            loaded[list] = read.domains
         }
         lists = loaded
-        ruleLists = compiled
-        lastModified = loaded[.ads]?.lastModified
-    }
+        lastModified = loaded[.easylist]?.lastModified
 
-    /// The list to use: the downloaded copy when it is accepted and at least as
-    /// new as the bundled one, otherwise the copy in the app.
-    private nonisolated static func readList(_ list: FilterList) -> BlockList? {
-        let bundled = Bundle.main.url(forResource: list.rawValue, withExtension: "txt")
-            .flatMap { try? String(contentsOf: $0, encoding: .utf8) }
-            .map { BlockList.parse($0) }
-        let downloadedText = try? String(contentsOf: downloadedFile(list), encoding: .utf8)
-        let downloaded = downloadedText.flatMap { FilterListUpdates.accept($0) }
-        return FilterListUpdates.chooseList(bundled: bundled, downloaded: downloaded)
-    }
-
-    /// Looks up the compiled list for this version, compiling it when needed.
-    /// Older versions are removed so the store doesn't grow every week.
-    private static func ruleList(for list: FilterList, _ parsed: BlockList) async -> WKContentRuleList? {
-        guard let store = WKContentRuleListStore.default() else { return nil }
-        let prefix = "zsync-\(list.rawValue)-"
-        let identifier = prefix + (parsed.version ?? "bundled")
-        if let existing = await store.lookUp(identifier) {
-            return existing
-        }
-        let json = await Task.detached(priority: .utility) { parsed.contentRuleListJSON() }.value
-        let compiled = await store.compile(identifier, json)
-        if compiled != nil {
-            for old in await store.availableIdentifiers() where old.hasPrefix(prefix) && old != identifier {
-                await store.remove(old)
+        var compiled: [BlockCategory: [WKContentRuleList]] = [:]
+        for category in [BlockCategory.ads, .trackers] {
+            let sources = FilterList.allCases.compactMap { list -> RuleSource? in
+                guard list.categories.contains(category), let text = texts[list], let domains = loaded[list] else { return nil }
+                return RuleSource(list: list, text: text, domains: domains)
             }
+            guard !sources.isEmpty else { continue }
+            compiled[category] = await Self.ruleLists(for: category, sources)
         }
-        return compiled
+        ruleLists = compiled
+        await Self.removeStaleRuleLists(keeping: Set(compiled.values.joined().compactMap(\.identifier)))
     }
 
-    /// Fetches both lists; keeps the old files unless both downloads are good.
-    private nonisolated static func downloadLists() async -> Bool {
-        var fetched: [FilterList: String] = [:]
-        for list in FilterList.allCases {
-            guard let text = await fetch(list.url), FilterListUpdates.accept(text) != nil else { return false }
-            fetched[list] = text
+    /// One list's text and domain rules, on its way to a compiled list.
+    private struct RuleSource: Sendable {
+        let list: FilterList
+        let text: String
+        let domains: BlockList
+    }
+
+    /// The copy to use, with its domain rules: the downloaded copy when it is
+    /// accepted and at least as new as the bundled one, otherwise the bundled.
+    private nonisolated static func readList(_ list: FilterList) -> (text: String, domains: BlockList)? {
+        let bundledText = Bundle.main.url(forResource: list.rawValue, withExtension: "txt")
+            .flatMap { try? String(contentsOf: $0, encoding: .utf8) }
+        let downloadedText = (try? String(contentsOf: downloadedFile(list), encoding: .utf8))
+            .flatMap { FilterListUpdates.accept($0, for: list) }
+        let bundled = bundledText.map { BlockList.parse($0) }
+        let downloaded = downloadedText.map { BlockList.parse($0) }
+        guard let chosen = FilterListUpdates.chooseList(bundled: bundled, downloaded: downloaded) else { return nil }
+        // `chooseList` hands back one of the two, unchanged.
+        if let downloaded, let downloadedText, chosen.version == downloaded.version,
+           chosen.lastModified == downloaded.lastModified, chosen.ruleCount == downloaded.ruleCount {
+            return (downloadedText, chosen)
         }
+        guard let bundledText else { return nil }
+        return (bundledText, chosen)
+    }
+
+    /// WebKit caps a compiled list at 150,000 rules; a little room is kept.
+    private nonisolated static let maxRulesPerList = 149_000
+
+    /// The category's compiled lists: every member's domain rules and pattern
+    /// rules, blocks first and exceptions after, split into as many lists as
+    /// the cap needs (each with all the exceptions). Looked up by a hash of
+    /// the texts, so they are compiled again only when a list changed. If
+    /// WebKit refuses them, the domain rules alone are used, as before.
+    private static func ruleLists(for category: BlockCategory, _ sources: [RuleSource]) async -> [WKContentRuleList] {
+        guard let store = WKContentRuleListStore.default() else { return [] }
+        let hash = await Task.detached(priority: .utility) { () -> String in
+            var hasher = SHA256()
+            hasher.update(data: Data("v\(NetworkFilters.version)".utf8))
+            for source in sources {
+                hasher.update(data: Data(source.list.rawValue.utf8))
+                hasher.update(data: Data(source.text.utf8))
+            }
+            return hasher.finalize().prefix(8).map { String(format: "%02x", $0) }.joined()
+        }.value
+        let prefix = "zsync-\(category.rawValue)-\(hash)-"
+
+        // Already compiled: every part, in order.
+        var found: [WKContentRuleList] = []
+        while let part = await store.lookUp(prefix + String(found.count)) { found.append(part) }
+        if !found.isEmpty { return found }
+        let fallback = prefix + "domains"
+        if let existing = await store.lookUp(fallback) { return [existing] }
+
+        let parts = await Task.detached(priority: .utility) { () -> [String] in
+            var blocks: [String] = []
+            var exceptions: [String] = []
+            for source in sources {
+                blocks += source.domains.blockRules()
+                exceptions += source.domains.exceptionRules()
+            }
+            for source in sources {
+                for rule in NetworkFilters.rules(in: source.text) {
+                    if rule.exception { exceptions.append(rule.json) } else { blocks.append(rule.json) }
+                }
+            }
+            // Lists overlap (a tracker on two lists): each rule once, in order.
+            var seen = Set<String>()
+            blocks = blocks.filter { seen.insert($0).inserted }
+            exceptions = exceptions.filter { seen.insert($0).inserted }
+            let room = max(10_000, maxRulesPerList - exceptions.count)
+            var parts: [String] = []
+            var start = 0
+            repeat {
+                let chunk = blocks[start..<min(start + room, blocks.count)]
+                parts.append("[" + (Array(chunk) + exceptions).joined(separator: ",") + "]")
+                start += room
+            } while start < blocks.count
+            return parts
+        }.value
+
+        var compiled: [WKContentRuleList] = []
+        for (index, json) in parts.enumerated() {
+            guard let list = await store.compile(prefix + String(index), json) else {
+                compiled = []
+                break
+            }
+            compiled.append(list)
+        }
+        if !compiled.isEmpty { return compiled }
+
+        // WebKit refused a part: the domain rules alone, which always compiled before.
+        NSLog("Content blocking: %@ pattern rules refused, using domain rules only", category.rawValue)
+        for index in parts.indices { await store.remove(prefix + String(index)) }
+        let json = await Task.detached(priority: .utility) { () -> String in
+            var seen = Set<String>()
+            let blocks = sources.flatMap { $0.domains.blockRules() }.filter { seen.insert($0).inserted }
+            let exceptions = sources.flatMap { $0.domains.exceptionRules() }.filter { seen.insert($0).inserted }
+            return "[" + (blocks + exceptions).joined(separator: ",") + "]"
+        }.value
+        return await store.compile(fallback, json).map { [$0] } ?? []
+    }
+
+    /// Compiled lists this version no longer uses, so the store doesn't grow
+    /// every week.
+    private static func removeStaleRuleLists(keeping current: Set<String>) async {
+        guard !current.isEmpty, let store = WKContentRuleListStore.default() else { return }
+        for old in await store.availableIdentifiers() where old.hasPrefix("zsync-") && !current.contains(old) {
+            await store.remove(old)
+        }
+    }
+
+    /// Fetches every list; each good download replaces its own file, so one
+    /// list that fails doesn't hold the others back.
+    private nonisolated static func downloadLists() async -> Bool {
         let folder = downloadedFile(.easylist).deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        for (list, text) in fetched {
+        var any = false
+        for list in FilterList.allCases {
+            guard let text = await fetch(list.url), FilterListUpdates.accept(text, for: list) != nil else { continue }
             try? text.write(to: downloadedFile(list), atomically: true, encoding: .utf8)
+            any = true
         }
-        return true
+        return any
     }
 
     /// The body as text, or nil on any failure. Reading stops at the size

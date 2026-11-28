@@ -34,6 +34,29 @@ targets:
       - path: ZenCompanion/Vendor/darkreader.js
         buildPhase: resources
         optional: true
+      # uBlock Origin's filter lists (GPLv3), fetched fresh by CI each build.
+      - path: ZenCompanion/Vendor/filters/ublock-filters.txt
+        buildPhase: resources
+        optional: true
+      - path: ZenCompanion/Vendor/filters/ublock-badware.txt
+        buildPhase: resources
+        optional: true
+      - path: ZenCompanion/Vendor/filters/ublock-quick-fixes.txt
+        buildPhase: resources
+        optional: true
+      - path: ZenCompanion/Vendor/filters/ublock-privacy.txt
+        buildPhase: resources
+        optional: true
+      - path: ZenCompanion/Vendor/filters/ublock-unbreak.txt
+        buildPhase: resources
+        optional: true
+      # Domain lists: Peter Lowe's and HaGeZi's Multi LIGHT (GPLv3).
+      - path: ZenCompanion/Vendor/filters/peter-lowe.txt
+        buildPhase: resources
+        optional: true
+      - path: ZenCompanion/Vendor/filters/hagezi-light.txt
+        buildPhase: resources
+        optional: true
       - path: AppIcon.icon
         buildPhase: resources
     info:

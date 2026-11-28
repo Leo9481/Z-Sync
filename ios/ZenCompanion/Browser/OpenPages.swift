@@ -11,6 +11,8 @@ protocol MiniBrowserPageHost: AnyObject {
     func openInNewPage(_ url: URL, from model: MiniBrowserModel)
     /// `window.close()`.
     func pageRequestedClose(_ model: MiniBrowserModel)
+    /// A popup turned out to be an ad: it closes, and its opener says so.
+    func popupWasBlocked(_ model: MiniBrowserModel, url: URL)
     func pageDidChange(_ model: MiniBrowserModel)
     func pageDidFinishLoading(_ model: MiniBrowserModel)
     func pageWasPinned(_ model: MiniBrowserModel, url: URL)
@@ -600,6 +602,9 @@ final class OpenPagesStore: MiniBrowserPageHost {
         let popup = makeModel(url ?? URL(string: "about:blank"))
         popup.inheritPrivacy(from: model, sharingData: true)
         let webView = MiniBrowserWebDriver.attach(to: popup, configuration: configuration)
+        // Watched until its first page shows: a popup opened blank and sent
+        // to an ad afterwards is still caught.
+        popup.popupOpenerHost = model.webView?.url?.host ?? model.pageURL?.host ?? ""
         let page = OpenPage(model: popup, openerID: opener?.id, lastUsedAt: now())
         _ = insert(page, after: opener)
         return webView
@@ -616,6 +621,16 @@ final class OpenPagesStore: MiniBrowserPageHost {
     func pageRequestedClose(_ model: MiniBrowserModel) {
         guard let page = allPages.first(where: { $0.model === model }) else { return }
         close(page.id)
+    }
+
+    func popupWasBlocked(_ model: MiniBrowserModel, url: URL) {
+        guard let page = allPages.first(where: { $0.model === model }) else { return }
+        let opener = page.openerID.flatMap(self.page)
+        close(page.id)
+        if let opener {
+            activate(opener.id)
+            opener.model.showBlockedNavigation(to: url, popup: true)
+        }
     }
 
     func pageDidChange(_ model: MiniBrowserModel) {

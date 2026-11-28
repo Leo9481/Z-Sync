@@ -176,8 +176,17 @@ final class MiniBrowserWebDriver: NSObject, WKNavigationDelegate, WKUIDelegate {
         guard navigationAction.targetFrame == nil else { return nil }
         let url = navigationAction.request.url
         if let url, !BrowserNavigationPolicy.loadsInWebView(url) {
-            // A popup aimed at an app: hand it over instead of dropping it.
-            handOff(url)
+            // A popup aimed at an app never opens it by itself (ads do this
+            // to launch shopping apps): a notice offers it instead.
+            MainActor.assumeIsolated { model?.offerAppLink(url) { [weak self] in self?.handOff(url) } }
+            return nil
+        }
+        // An ad by the filter lists: refused whatever opened it, a sized
+        // window or a tapped link included (popunders use both).
+        if let url, MainActor.assumeIsolated({
+            ContentBlocker.shared.blocksPopup(url, openerHost: webView.url?.host)
+        }) {
+            MainActor.assumeIsolated { model?.showBlockedNavigation(to: url, popup: true) }
             return nil
         }
         if let url, PopupBlocking.blocksPopup(
@@ -231,7 +240,22 @@ final class MiniBrowserWebDriver: NSObject, WKNavigationDelegate, WKUIDelegate {
                     model.host?.openInNewPage(url, from: model)
                 }
             }
-            return UIMenu(children: [open] + suggested)
+            // Pages never open apps by themselves (see `decidePolicyFor`), so
+            // the reader can ask for the app here: iOS opens the link only in
+            // an app that claims it.
+            var actions = [open]
+            if ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
+                actions.append(UIAction(
+                    title: String(localized: "Open in App"),
+                    image: UIImage(systemName: "arrow.up.forward.app")
+                ) { _ in
+                    UIApplication.shared.open(url, options: [.universalLinksOnly: true]) { opened in
+                        guard !opened else { return }
+                        MainActor.assumeIsolated { self?.model?.showNotice("No app opens this link", symbol: "arrow.up.forward.app") }
+                    }
+                })
+            }
+            return UIMenu(children: actions + suggested)
         })
     }
 
@@ -392,6 +416,13 @@ final class MiniBrowserWebDriver: NSObject, WKNavigationDelegate, WKUIDelegate {
     /// Offers a link to the app that owns its scheme. When nothing takes it
     /// the page stays where it is and the toast says why - silently doing
     /// nothing reads like a broken browser.
+    /// WebKit's "allow, but don't try to open an app for it" (Firefox for iOS
+    /// uses the same value). Not in the public enum; falls back to allow.
+    private static let opensWithoutAsking: Set<String> = ["mailto", "tel", "sms", "facetime", "facetime-audio"]
+
+    private static let allowWithoutAppLink =
+        WKNavigationActionPolicy(rawValue: WKNavigationActionPolicy.allow.rawValue + 2) ?? .allow
+
     private func handOff(_ url: URL) {
         ExternalBrowser.open(url) { [weak self] opened in
             guard !opened else { return }
@@ -411,6 +442,16 @@ final class MiniBrowserWebDriver: NSObject, WKNavigationDelegate, WKUIDelegate {
         // `<a download>`, `blob:` files included.
         if navigationAction.shouldPerformDownload {
             decisionHandler(.download, preferences)
+            return
+        }
+        // A popup still on its way to its first page: sent to an ad (often
+        // after opening blank), it closes instead.
+        if navigationAction.targetFrame?.isMainFrame ?? true,
+           let url = navigationAction.request.url,
+           let model, let opener = MainActor.assumeIsolated({ model.popupOpenerHost }),
+           MainActor.assumeIsolated({ ContentBlocker.shared.blocksPopup(url, openerHost: opener.isEmpty ? nil : opener) }) {
+            decisionHandler(.cancel, preferences)
+            MainActor.assumeIsolated { model.host?.popupWasBlocked(model, url: url) }
             return
         }
         if navigationAction.targetFrame?.isMainFrame ?? true,
@@ -437,16 +478,24 @@ final class MiniBrowserWebDriver: NSObject, WKNavigationDelegate, WKUIDelegate {
             MainActor.assumeIsolated { model?.prepareBlocking(for: url) }
         }
         guard let url = navigationAction.request.url, !BrowserNavigationPolicy.loadsInWebView(url) else {
-            decisionHandler(.allow, preferences)
+            // A web address always loads here, even when an installed app
+            // claims it (a universal link): an ad under the finger looks just
+            // like a link the reader meant, so pages never open apps.
+            decisionHandler(Self.allowWithoutAppLink, preferences)
             return
         }
-        // Only a tap in the main frame may leave the app; a page that
-        // opens another app on its own is ignored.
+        // A link to another app: only from a tap in the main frame, and then
+        // it asks with the small notice, which can be ignored. Mail, phone and
+        // messages open at once; ads don't use them.
         if BrowserNavigationPolicy.opensExternally(
             userTapped: navigationAction.navigationType == .linkActivated,
             isMainFrame: navigationAction.targetFrame?.isMainFrame ?? true
         ) {
-            handOff(url)
+            if Self.opensWithoutAsking.contains(url.scheme?.lowercased() ?? "") {
+                handOff(url)
+            } else {
+                MainActor.assumeIsolated { model?.offerAppLink(url) { [weak self] in self?.handOff(url) } }
+            }
         }
         decisionHandler(.cancel, preferences)
     }
@@ -760,6 +809,11 @@ final class MiniBrowserWebDriver: NSObject, WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        // A popup's first web page is on screen: from here it's a page like
+        // any other. A blank window it opened with doesn't count.
+        if let scheme = webView.url?.scheme?.lowercased(), scheme == "http" || scheme == "https" {
+            MainActor.assumeIsolated { model?.popupOpenerHost = nil }
+        }
         // A committed document is on screen: the chrome starts over for it,
         // even when it is the previous page coming back. Every commit counts
         // as a new document for the colour, so a reload of the same address

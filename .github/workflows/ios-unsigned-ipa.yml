@@ -50,6 +50,35 @@ jobs:
           cp "$RUNNER_TEMP/darkreader/package/LICENSE" ZenCompanion/Vendor/darkreader-LICENSE.txt || true
           ls -lh ZenCompanion/Vendor
 
+      - name: Fetch filter lists (uBlock Origin, Peter Lowe, HaGeZi)
+        # Bundled so a fresh install blocks with them at once; the app
+        # downloads newer copies weekly. A failed download leaves the list
+        # out of this build instead of failing it.
+        run: |
+          set -u
+          mkdir -p ZenCompanion/Vendor/filters
+          for pair in ublock-filters:filters ublock-badware:badware ublock-quick-fixes:quick-fixes ublock-privacy:privacy ublock-unbreak:unbreak; do
+            name="${pair%%:*}"; file="${pair##*:}"
+            out="ZenCompanion/Vendor/filters/$name.txt"
+            if curl -fsSL --max-time 60 -o "$out" "https://ublockorigin.github.io/uAssets/filters/$file.txt"                && head -c 8 "$out" | grep -q "! Title"; then
+              echo "$name: $(wc -l < "$out") lines"
+            else
+              echo "::warning::Could not fetch $name; building without it"
+              rm -f "$out"
+            fi
+          done
+          fetch_domains() {
+            out="ZenCompanion/Vendor/filters/$1.txt"
+            if curl -fsSL --max-time 90 -o "$out" "$2" && head -c 40 "$out" | grep -q "Adblock"; then
+              echo "$1: $(wc -l < "$out") lines"
+            else
+              echo "::warning::Could not fetch $1; building without it"
+              rm -f "$out"
+            fi
+          }
+          fetch_domains peter-lowe "https://pgl.yoyo.org/adservers/serverlist.php?hostformat=adblockplus&showintro=0&mimetype=plaintext"
+          fetch_domains hagezi-light "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/light.txt"
+
       - name: Generate Xcode project
         run: xcodegen generate
 

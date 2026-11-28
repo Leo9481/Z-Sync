@@ -20,6 +20,9 @@ struct BlockList: Sendable {
     let allowedOn: [String: Set<String>]
     /// Sites the list leaves alone entirely (`$document` exceptions).
     let allowedPages: Set<String>
+    /// Blocked only as popups (`||ads.example^$popup`): ad pages a tap
+    /// would open in a new window.
+    var popupOnly: Set<String> = []
     /// The list's own version line, e.g. `202610242150`.
     let version: String?
     /// The list's "Last modified" line, e.g. `24 Oct 2026 21:50 UTC`.
@@ -46,6 +49,15 @@ struct BlockList: Sendable {
         return true
     }
 
+    /// True when a new window to `host` is an ad: the host is blocked by the
+    /// list, or blocked as a popup, and no exception lets it through.
+    func blocksPopup(host: String, openerHost: String?) -> Bool {
+        let request = Self.normalized(host)
+        if blocks(requestHost: request, pageHost: openerHost) { return true }
+        guard Self.matchesSuffix(request, popupOnly) else { return false }
+        return !Self.matchesSuffix(request, allowedEverywhere)
+    }
+
     // MARK: - Parsing
 
     /// Request types a rule may be limited to. Both apps block a domain for
@@ -64,6 +76,7 @@ struct BlockList: Sendable {
         var allowedFirstParty = Set<String>()
         var allowedOn: [String: Set<String>] = [:]
         var allowedPages = Set<String>()
+        var popupOnly = Set<String>()
         var version: String?
         var lastModified: String?
 
@@ -78,16 +91,25 @@ struct BlockList: Sendable {
 
             if !rule.exception {
                 var onlyThirdParty = false
+                var popup = false
                 for option in rule.options {
                     if option == "third-party" || option == "3p" {
                         onlyThirdParty = true
+                    } else if option == "popup" {
+                        popup = true
                     } else if option != "all" && option != "important" {
                         // Some request types only, popups, page blocks,
                         // one-site rules, redirects: not ours.
                         return
                     }
                 }
-                if onlyThirdParty { thirdParty.insert(rule.domain) } else { anywhere.insert(rule.domain) }
+                if popup {
+                    popupOnly.insert(rule.domain)
+                } else if onlyThirdParty {
+                    thirdParty.insert(rule.domain)
+                } else {
+                    anywhere.insert(rule.domain)
+                }
                 return
             }
 
@@ -112,7 +134,7 @@ struct BlockList: Sendable {
             // Element hiding and the like: nothing to undo here.
         }
 
-        return BlockList(
+        var list = BlockList(
             anywhere: anywhere,
             thirdParty: thirdParty,
             allowedEverywhere: allowedEverywhere,
@@ -122,6 +144,8 @@ struct BlockList: Sendable {
             version: version,
             lastModified: lastModified
         )
+        list.popupOnly = popupOnly
+        return list
     }
 
     /// `||domain^` or `@@||domain^`, with the options after `$`.
@@ -236,35 +260,47 @@ struct BlockList: Sendable {
     /// The list as a WebKit content rule list: blocks first, exceptions after,
     /// because `ignore-previous-rules` only undoes rules above it.
     func contentRuleListJSON() -> String {
+        "[" + (blockRules() + exceptionRules()).joined(separator: ",") + "]"
+    }
+
+    /// The domain blocks as WebKit rules (JSON objects).
+    func blockRules() -> [String] {
         var rules: [String] = []
-        rules.reserveCapacity(ruleCount + allowedOn.count + 16)
-
-        func filter(_ domain: String) -> String {
-            "^[^:]+://+([^:/]+\\\\.)?" + domain.replacingOccurrences(of: ".", with: "\\\\.") + "[:/]"
-        }
-        func quoted(_ values: [String]) -> String {
-            "[" + values.map { "\"*\($0)\"" }.joined(separator: ",") + "]"
-        }
+        rules.reserveCapacity(ruleCount)
         let types = "[" + Self.resourceTypes.map { "\"\($0)\"" }.joined(separator: ",") + "]"
-
         for domain in anywhere.sorted() {
-            rules.append(#"{"trigger":{"url-filter":"\#(filter(domain))","resource-type":\#(types)},"action":{"type":"block"}}"#)
+            rules.append(#"{"trigger":{"url-filter":"\#(Self.filter(domain))","resource-type":\#(types)},"action":{"type":"block"}}"#)
         }
         for domain in thirdParty.sorted() {
-            rules.append(#"{"trigger":{"url-filter":"\#(filter(domain))","resource-type":\#(types),"load-type":["third-party"]},"action":{"type":"block"}}"#)
+            rules.append(#"{"trigger":{"url-filter":"\#(Self.filter(domain))","resource-type":\#(types),"load-type":["third-party"]},"action":{"type":"block"}}"#)
         }
+        return rules
+    }
+
+    /// The exceptions as WebKit rules (JSON objects); they go after every block.
+    func exceptionRules() -> [String] {
+        var rules: [String] = []
         for domain in allowedEverywhere.sorted() {
-            rules.append(#"{"trigger":{"url-filter":"\#(filter(domain))"},"action":{"type":"ignore-previous-rules"}}"#)
+            rules.append(#"{"trigger":{"url-filter":"\#(Self.filter(domain))"},"action":{"type":"ignore-previous-rules"}}"#)
         }
         for domain in allowedFirstParty.sorted() {
-            rules.append(#"{"trigger":{"url-filter":"\#(filter(domain))","load-type":["first-party"]},"action":{"type":"ignore-previous-rules"}}"#)
+            rules.append(#"{"trigger":{"url-filter":"\#(Self.filter(domain))","load-type":["first-party"]},"action":{"type":"ignore-previous-rules"}}"#)
         }
         for (domain, sites) in allowedOn.sorted(by: { $0.key < $1.key }) {
-            rules.append(#"{"trigger":{"url-filter":"\#(filter(domain))","if-domain":\#(quoted(sites.sorted()))},"action":{"type":"ignore-previous-rules"}}"#)
+            rules.append(#"{"trigger":{"url-filter":"\#(Self.filter(domain))","if-domain":\#(Self.quoted(sites.sorted()))},"action":{"type":"ignore-previous-rules"}}"#)
         }
         if !allowedPages.isEmpty {
-            rules.append(#"{"trigger":{"url-filter":".*","if-domain":\#(quoted(allowedPages.sorted()))},"action":{"type":"ignore-previous-rules"}}"#)
+            rules.append(#"{"trigger":{"url-filter":".*","if-domain":\#(Self.quoted(allowedPages.sorted()))},"action":{"type":"ignore-previous-rules"}}"#)
         }
-        return "[" + rules.joined(separator: ",") + "]"
+        return rules
+    }
+
+    private static func filter(_ domain: String) -> String {
+        // Already escaped for JSON: `\\.` in the file is `\.` in the regex.
+        "^[^:]+://+([^:/]+\\\\.)?" + domain.replacingOccurrences(of: ".", with: "\\\\.") + "[:/]"
+    }
+
+    private static func quoted(_ values: [String]) -> String {
+        "[" + values.map { "\"*\($0)\"" }.joined(separator: ",") + "]"
     }
 }
