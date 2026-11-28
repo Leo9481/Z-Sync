@@ -129,6 +129,23 @@ actor FxAClient {
         )
     }
 
+    /// An auth-server call signed with the session, for the device endpoints
+    /// Send Tab uses (`account/device`, `account/devices`, …). `path` may
+    /// carry a query. Returns the parsed JSON: an object or an array.
+    func deviceAPI(path: String, method: String, sessionTokenHex: String, json: [String: Any]? = nil) async throws -> Any {
+        let token = try FxACrypto.unhex(sessionTokenHex)
+        guard let url = URL(string: Self.authBase.absoluteString + "/" + path) else {
+            throw SyncError.auth("bad device path")
+        }
+        do {
+            return try await hawkAny(url: url, method: method, token: token, tokenType: "sessionToken", json: json, detailedErrors: true)
+        } catch SyncError.auth(let message, let invalid) {
+            // Which call failed, so a report from the phone says where to look.
+            let call = path.split(separator: "?").first.map(String.init) ?? path
+            throw SyncError.auth("\(message) [\(method) \(call)]", sessionInvalid: invalid)
+        }
+    }
+
     private func hawkJSON(
         url: URL,
         method: String,
@@ -145,7 +162,8 @@ actor FxAClient {
         method: String,
         token: Data,
         tokenType: String,
-        json: [String: Any]?
+        json: [String: Any]?,
+        detailedErrors: Bool = false
     ) async throws -> Any {
         let material = FxACrypto.tokenMaterial(token: token, type: tokenType)
         var headers: [String: String] = [
@@ -175,7 +193,19 @@ actor FxAClient {
             // mapping as every other path, so an errno 103 body surfaces as
             // `.totpRequired` here too instead of a plain auth error.
             if let error = Self.authError(status: response.statusCode, body: obj) {
-                throw Self.sessionAuthError(error, status: response.statusCode, body: obj)
+                let mapped = Self.sessionAuthError(error, status: response.statusCode, body: obj)
+                if detailedErrors, case .auth(let message, let invalid) = mapped {
+                    // The server's own details: its error number and, for a
+                    // rejected body, which fields it objected to.
+                    var detail = "HTTP \(response.statusCode)"
+                    if let errno = obj["errno"] as? Int { detail += ", errno \(errno)" }
+                    if let validation = obj["validation"] as? [String: Any],
+                       let keys = validation["keys"] as? [String], !keys.isEmpty {
+                        detail += ", fields: " + keys.joined(separator: ", ")
+                    }
+                    throw SyncError.auth("\(message) (\(detail))", sessionInvalid: invalid)
+                }
+                throw mapped
             }
             let text = (obj["message"] as? String) ?? (obj["error"] as? String) ?? String(data: response.body, encoding: .utf8) ?? "HTTP"
             throw SyncError.auth(text)
