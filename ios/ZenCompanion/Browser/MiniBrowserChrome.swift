@@ -1127,10 +1127,15 @@ struct PageSwipeEnd {
 /// Loading fills the whole bar from the left. A line on its edge would never
 /// sit right against the capsule's curve. However the load ends, the fill first
 /// reaches the end of the bar and only then fades away.
+/// Reads the load straight from the page's model: progress ticks many times
+/// a second while a page loads, and only this fill needs to redraw for them,
+/// not the whole bar.
 private struct LoadingFill: View {
-    let isLoading: Bool
-    let progress: Double
+    let model: MiniBrowserModel
     let tint: Color
+
+    private var isLoading: Bool { model.isLoading }
+    private var progress: Double { model.estimatedProgress }
 
     @State private var shown: Double = 0
     @State private var opacity: Double = 0
@@ -1280,11 +1285,7 @@ struct MiniBrowserTopBar: View {
                 .padding(.horizontal, 4)
                 .frame(height: barHeight)
                 .background {
-                    LoadingFill(
-                        isLoading: model.isLoading,
-                        progress: model.estimatedProgress,
-                        tint: ink.opacity(0.1)
-                    )
+                    LoadingFill(model: model, tint: ink.opacity(0.1))
                     // A page brings its own load: nothing carries over a switch.
                     .id(page?.id)
                 }

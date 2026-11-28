@@ -206,9 +206,13 @@ final class ContentBlocker {
         started = true
         settings = loadSettings()
         asked = preferences.bool(Keys.asked, scope: .standard)
-        consentBundle = Bundle.main.url(forResource: "autoconsent", withExtension: "js")
-            .flatMap { try? String(contentsOf: $0, encoding: .utf8) }
         Task {
+            // Half a megabyte: read off the main thread, while the first page
+            // starts. Pages set up before it arrives skip cookie banners once.
+            consentBundle = await Task.detached(priority: .userInitiated) {
+                Bundle.main.url(forResource: "autoconsent", withExtension: "js")
+                    .flatMap { try? String(contentsOf: $0, encoding: .utf8) }
+            }.value
             await loadLists()
             let last = preferences.string(Keys.updatedAt, scope: .standard).flatMap(Double.init).map(Date.init(timeIntervalSince1970:))
             // Nothing to keep current while both list switches are off.

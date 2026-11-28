@@ -78,6 +78,8 @@ enum PageTranslationScript {
     var timer = null;
     function flush() {
       timer = null;
+      // A tab that is not on screen waits: its new text goes when it is shown.
+      if (document.hidden) { return; }
       var ids = [], texts = [];
       pending.forEach(function (node) {
         if (!node.isConnected) { return; }
@@ -117,6 +119,11 @@ enum PageTranslationScript {
       });
       if (!timer) { timer = setTimeout(flush, 400); }
     });
+    if (Z.onVisible) { document.removeEventListener('visibilitychange', Z.onVisible); }
+    Z.onVisible = function () {
+      if (!document.hidden && pending.size && !timer) { timer = setTimeout(flush, 100); }
+    };
+    document.addEventListener('visibilitychange', Z.onVisible);
     Z.observer.observe(document.body || document.documentElement,
                        { childList: true, subtree: true, characterData: true });
     return 1;
@@ -350,6 +357,8 @@ extension MiniBrowserModel {
     }
 
     /// Translates `batch` in chunks and writes each chunk back as it is done.
+    /// Text translated before in this job is written back at once, and the
+    /// same text twice in a batch is asked for once.
     @available(iOS 18.0, *)
     private func translate(
         _ batch: PageTextBatch,
@@ -357,28 +366,62 @@ extension MiniBrowserModel {
         session: TranslationSession,
         in webView: WKWebView
     ) async throws {
+        if translationMemoJob != job.id {
+            translationMemo = [:]
+            translationMemoJob = job.id
+        }
+        var knownIDs: [Int] = []
+        var knownTexts: [String] = []
+        // Each text still to translate, once, with every node that holds it.
+        var waiting: [String: [Int]] = [:]
+        var order: [String] = []
+        for (index, id) in batch.ids.enumerated() {
+            let text = batch.texts[index]
+            if let done = translationMemo[text] {
+                knownIDs.append(id)
+                knownTexts.append(done)
+            } else {
+                if waiting[text] == nil { order.append(text) }
+                waiting[text, default: []].append(id)
+            }
+        }
+        if !knownIDs.isEmpty {
+            try await writeTranslations(ids: knownIDs, texts: knownTexts, in: webView)
+        }
+
         let size = 60
-        for start in stride(from: 0, to: batch.ids.count, by: size) {
-            let range = start..<min(start + size, batch.ids.count)
-            let requests = range.map {
-                TranslationSession.Request(sourceText: batch.texts[$0], clientIdentifier: String(batch.ids[$0]))
+        for start in stride(from: 0, to: order.count, by: size) {
+            let chunk = Array(order[start..<min(start + size, order.count)])
+            let requests = chunk.enumerated().map {
+                TranslationSession.Request(sourceText: $0.element, clientIdentifier: String($0.offset))
             }
             let responses = try await session.translations(from: requests)
             guard translationJob?.id == job.id else { return }
+            // A page that never stops adding new text cannot grow it forever.
+            if translationMemo.count > 5_000 { translationMemo.removeAll() }
             var doneIDs: [Int] = []
             var doneTexts: [String] = []
             for response in responses {
-                guard let id = response.clientIdentifier.flatMap(Int.init) else { continue }
-                doneIDs.append(id)
-                doneTexts.append(response.targetText)
+                guard let offset = response.clientIdentifier.flatMap(Int.init), offset < chunk.count else { continue }
+                let source = chunk[offset]
+                translationMemo[source] = response.targetText
+                for id in waiting[source] ?? [] {
+                    doneIDs.append(id)
+                    doneTexts.append(response.targetText)
+                }
             }
-            _ = try await webView.callAsyncJavaScript(
-                PageTranslationScript.apply,
-                arguments: ["ids": doneIDs, "texts": doneTexts],
-                in: nil,
-                contentWorld: PageTranslationScript.world
-            )
+            try await writeTranslations(ids: doneIDs, texts: doneTexts, in: webView)
         }
+    }
+
+    private func writeTranslations(ids: [Int], texts: [String], in webView: WKWebView) async throws {
+        guard !ids.isEmpty else { return }
+        _ = try await webView.callAsyncJavaScript(
+            PageTranslationScript.apply,
+            arguments: ["ids": ids, "texts": texts],
+            in: nil,
+            contentWorld: PageTranslationScript.world
+        )
     }
 }
 

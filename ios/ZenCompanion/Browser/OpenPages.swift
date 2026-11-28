@@ -404,10 +404,12 @@ final class OpenPagesStore: MiniBrowserPageHost {
         }
     }
 
-    /// Keeps the most recently used pages live.
-    private func trimLivePages(limit: Int = OpenPagesStore.liveLimit) {
+    /// Keeps the most recently used pages live. `keepingPrivate` leaves
+    /// private pages alone: asleep, a private page loses its sign-ins.
+    private func trimLivePages(limit: Int = OpenPagesStore.liveLimit, keepingPrivate: Bool = false) {
         let live = allPages
             .filter { $0.model.webView != nil && $0.id != activeID }
+            .filter { !(keepingPrivate && $0.model.isPrivate) }
             .sorted { $0.lastUsedAt > $1.lastUsedAt }
         for page in live.dropFirst(max(0, limit - 1)) {
             putToSleep(page)
@@ -783,6 +785,11 @@ final class OpenPagesStore: MiniBrowserPageHost {
 
     /// The app may not come back, so what would stay on close is saved now.
     private func didEnterBackground() {
+        // Out of sight, the app keeps the page on screen and the one used
+        // before it live, and lets the others sleep: less memory in the
+        // background, so iOS is less likely to end the app, and the tabs
+        // come back faster when it does not.
+        trimLivePages(limit: 2, keepingPrivate: true)
         for page in allPages {
             saveIfItStays(page)
             if page.id == activeID { page.lastUsedAt = now() }
