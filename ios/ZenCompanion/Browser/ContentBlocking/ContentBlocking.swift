@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import Observation
+import UIKit
 import WebKit
 
 /// What the quick browser can block. Each has its own switch.
@@ -140,7 +141,10 @@ enum FilterList: String, CaseIterable, Sendable {
 
 /// When to download fresh lists, and which downloads to trust.
 enum FilterListUpdates {
-    static let interval: TimeInterval = 7 * 24 * 60 * 60
+    /// Checked once a day: HaGeZi publishes daily and uBlock Origin's lists
+    /// expire after five days. A list that hasn't changed costs one small
+    /// request ("only if changed").
+    static let interval: TimeInterval = 24 * 60 * 60
     /// Well above the real lists, so a broken server can't fill the phone.
     static let maxBytes = 16 * 1024 * 1024
     /// Both real lists have tens of thousands; far fewer means a bad download.
@@ -247,6 +251,9 @@ final class ContentBlocker {
         settings = loadSettings()
         asked = preferences.bool(Keys.asked, scope: .standard)
         Task {
+            // The lists compiled last time, at once: pages are protected from
+            // the first moment, while the current texts are read and checked.
+            await restoreCompiledLists()
             // Half a megabyte: read off the main thread, while the first page
             // starts. Pages set up before it arrives skip cookie banners once.
             consentBundle = await Task.detached(priority: .userInitiated) {
@@ -254,14 +261,55 @@ final class ContentBlocker {
                     .flatMap { try? String(contentsOf: $0, encoding: .utf8) }
             }.value
             await loadLists()
-            let last = preferences.string(Keys.updatedAt, scope: .standard).flatMap(Double.init).map(Date.init(timeIntervalSince1970:))
-            // Nothing to keep current while both list switches are off.
-            let listsInUse = settings.ads || settings.trackers
-            if listsInUse, FilterListUpdates.isDue(lastUpdate: last, now: Date()), await Self.downloadLists() {
-                preferences.setString(String(Date().timeIntervalSince1970), Keys.updatedAt, scope: .standard)
-                await loadLists()
+            await updateIfDue()
+        }
+        // An app left open for days still updates: checked each time it comes back.
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                Task { await self.updateIfDue() }
             }
         }
+    }
+
+    @ObservationIgnored private var updating = false
+
+    /// Downloads what changed, once a day, and swaps in the new rules. The
+    /// rules in use stay in place while the new ones compile.
+    private func updateIfDue() async {
+        guard !updating else { return }
+        let last = preferences.string(Keys.updatedAt, scope: .standard).flatMap(Double.init).map(Date.init(timeIntervalSince1970:))
+        // Nothing to keep current while both list switches are off.
+        guard settings.ads || settings.trackers, FilterListUpdates.isDue(lastUpdate: last, now: Date()) else { return }
+        updating = true
+        defer { updating = false }
+        let result = await Self.downloadLists()
+        // Checked, even when nothing changed: the next check is a day later.
+        if result.checked {
+            preferences.setString(String(Date().timeIntervalSince1970), Keys.updatedAt, scope: .standard)
+        }
+        if result.changed { await loadLists() }
+    }
+
+    /// The compiled lists last used, looked up by the identifiers saved after
+    /// they compiled. Looking up is quick; compiling is what takes a minute.
+    private func restoreCompiledLists() async {
+        guard ruleLists.isEmpty, let store = WKContentRuleListStore.default() else { return }
+        var restored: [BlockCategory: [WKContentRuleList]] = [:]
+        for category in [BlockCategory.ads, .trackers] {
+            let ids = preferences.string(Keys.compiled(category), scope: .standard)?
+                .split(separator: "\n").map(String.init) ?? []
+            var lists: [WKContentRuleList] = []
+            for id in ids {
+                guard let list = await store.lookUp(id) else { lists = []; break }
+                lists.append(list)
+            }
+            if !lists.isEmpty { restored[category] = lists }
+        }
+        // `loadLists` may have finished first; its lists are newer.
+        if ruleLists.isEmpty, !restored.isEmpty { ruleLists = restored }
     }
 
     func update(_ settings: ContentBlockingSettings) {
@@ -354,8 +402,13 @@ final class ContentBlocker {
             guard !sources.isEmpty else { continue }
             compiled[category] = await Self.ruleLists(for: category, sources)
         }
-        ruleLists = compiled
-        await Self.removeStaleRuleLists(keeping: Set(compiled.values.joined().compactMap(\.identifier)))
+        // Swapped in per category, and only when it compiled: a category that
+        // failed keeps the rules it had.
+        for (category, lists) in compiled where !lists.isEmpty {
+            ruleLists[category] = lists
+            preferences.setString(lists.compactMap(\.identifier).joined(separator: "\n"), Keys.compiled(category), scope: .standard)
+        }
+        await Self.removeStaleRuleLists(keeping: Set(ruleLists.values.joined().compactMap(\.identifier)))
     }
 
     /// One list's text and domain rules, on its way to a compiled list.
@@ -471,30 +524,66 @@ final class ContentBlocker {
         }
     }
 
-    /// Fetches every list; each good download replaces its own file, so one
-    /// list that fails doesn't hold the others back.
-    private nonisolated static func downloadLists() async -> Bool {
+    /// Asks for every list "only if changed" (the server's `ETag` and
+    /// `Last-Modified` from last time). Each new copy that passes replaces its
+    /// own file, so one list that fails doesn't hold the others back.
+    /// `checked`: at least one server answered; `changed`: a file was replaced.
+    private nonisolated static func downloadLists() async -> (checked: Bool, changed: Bool) {
         let folder = downloadedFile(.easylist).deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        var any = false
+        let defaults = UserDefaults.standard
+        var checked = false
+        var changed = false
         for list in FilterList.allCases {
-            guard let text = await fetch(list.url), FilterListUpdates.accept(text, for: list) != nil else { continue }
-            try? text.write(to: downloadedFile(list), atomically: true, encoding: .utf8)
-            any = true
+            let file = downloadedFile(list)
+            // Validators only count while the file they describe is there.
+            let haveFile = FileManager.default.fileExists(atPath: file.path)
+            let etag = haveFile ? defaults.string(forKey: "content_blocking_etag_\(list.rawValue)") : nil
+            let modified = haveFile ? defaults.string(forKey: "content_blocking_modified_\(list.rawValue)") : nil
+            switch await fetch(list.url, etag: etag, lastModified: modified) {
+            case .notModified:
+                checked = true
+            case .fetched(let text, let newEtag, let newModified):
+                checked = true
+                guard FilterListUpdates.accept(text, for: list) != nil else { continue }
+                guard (try? text.write(to: file, atomically: true, encoding: .utf8)) != nil else { continue }
+                defaults.set(newEtag, forKey: "content_blocking_etag_\(list.rawValue)")
+                defaults.set(newModified, forKey: "content_blocking_modified_\(list.rawValue)")
+                changed = true
+            case .failed:
+                continue
+            }
         }
-        return any
+        return (checked, changed)
+    }
+
+    private enum FetchResult {
+        case notModified
+        case fetched(text: String, etag: String?, lastModified: String?)
+        case failed
     }
 
     /// The body as text, or nil on any failure. Reading stops at the size
     /// limit, so a broken server can't fill memory.
-    private nonisolated static func fetch(_ url: URL) async -> String? {
+    private nonisolated static func fetch(_ url: URL, etag: String?, lastModified: String?) async -> FetchResult {
         var request = URLRequest(url: url, timeoutInterval: 30)
         request.cachePolicy = .reloadIgnoringLocalCacheData
+        if let etag { request.setValue(etag, forHTTPHeaderField: "If-None-Match") }
+        if let lastModified { request.setValue(lastModified, forHTTPHeaderField: "If-Modified-Since") }
         guard let (bytes, response) = try? await URLSession.shared.bytes(for: request),
-              (response as? HTTPURLResponse)?.statusCode == 200,
-              response.expectedContentLength <= Int64(FilterListUpdates.maxBytes) else { return nil }
+              let http = response as? HTTPURLResponse else { return .failed }
+        if http.statusCode == 304 { return .notModified }
+        guard http.statusCode == 200,
+              response.expectedContentLength <= Int64(FilterListUpdates.maxBytes) else { return .failed }
+        let newEtag = http.value(forHTTPHeaderField: "ETag")
+        let newModified = http.value(forHTTPHeaderField: "Last-Modified")
+        guard let text = await read(bytes, expected: response.expectedContentLength) else { return .failed }
+        return .fetched(text: text, etag: newEtag, lastModified: newModified)
+    }
+
+    private nonisolated static func read(_ bytes: URLSession.AsyncBytes, expected: Int64) async -> String? {
         var data = Data()
-        data.reserveCapacity(max(0, Int(response.expectedContentLength)))
+        data.reserveCapacity(max(0, Int(min(expected, Int64(FilterListUpdates.maxBytes)))))
         do {
             for try await byte in bytes {
                 data.append(byte)
@@ -520,6 +609,8 @@ final class ContentBlocker {
     private enum Keys {
         static let asked = "content_blocking_setup_asked"
         static let updatedAt = "content_blocking_lists_updated_at"
+        /// The compiled lists last in use, one identifier per line.
+        static func compiled(_ category: BlockCategory) -> String { "content_blocking_compiled_\(category.rawValue)" }
         static func on(_ category: BlockCategory) -> String { "content_blocking_\(category.rawValue)" }
         static func sites(_ category: BlockCategory) -> String { "content_blocking_off_for_sites_\(category.rawValue)" }
     }
