@@ -100,6 +100,13 @@ enum FilterList: String, CaseIterable, Sendable {
     case ublockQuickFixes = "ublock-quick-fixes"
     case ublockPrivacy = "ublock-privacy"
     case ublockUnbreak = "ublock-unbreak"
+    // Domain lists, as uBlock Origin and DNS blockers use them: hosts of ad
+    // networks, trackers and device telemetry the lists above leave out.
+    // Peter Lowe's list is on by default in uBlock Origin; HaGeZi's Multi
+    // LIGHT (GPLv3) is the low-breakage edition, built only from domains
+    // seen on top-1M lists.
+    case peterLowe = "peter-lowe"
+    case hageziLight = "hagezi-light"
 
     var url: URL {
         switch self {
@@ -110,6 +117,8 @@ enum FilterList: String, CaseIterable, Sendable {
         case .ublockQuickFixes: return URL(string: "https://ublockorigin.github.io/uAssets/filters/quick-fixes.txt")!
         case .ublockPrivacy: return URL(string: "https://ublockorigin.github.io/uAssets/filters/privacy.txt")!
         case .ublockUnbreak: return URL(string: "https://ublockorigin.github.io/uAssets/filters/unbreak.txt")!
+        case .peterLowe: return URL(string: "https://pgl.yoyo.org/adservers/serverlist.php?hostformat=adblockplus&showintro=0&mimetype=plaintext")!
+        case .hageziLight: return URL(string: "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/light.txt")!
         }
     }
 
@@ -117,15 +126,16 @@ enum FilterList: String, CaseIterable, Sendable {
     /// and an exception only undoes rules in the same compiled list.
     var categories: [BlockCategory] {
         switch self {
-        case .easylist, .ublockFilters, .ublockBadware, .ublockQuickFixes: return [.ads]
-        case .easyprivacy, .ublockPrivacy: return [.trackers]
+        case .easylist, .ublockFilters, .ublockBadware, .ublockQuickFixes, .peterLowe: return [.ads]
+        // Mostly trackers and telemetry, and the Trackers list has the room.
+        case .easyprivacy, .ublockPrivacy, .hageziLight: return [.trackers]
         case .ublockUnbreak: return [.ads, .trackers]
         }
     }
 
-    /// EasyList and EasyPrivacy are full of domain rules; uBO's lists are
-    /// mostly patterns and exceptions, so they are checked by size instead.
-    var isEasyList: Bool { self == .easylist || self == .easyprivacy }
+    /// Lists made mostly of domain rules, checked by how many they hold; uBO's
+    /// lists are mostly patterns and exceptions, so they are checked by size.
+    var isDomainList: Bool { [.easylist, .easyprivacy, .peterLowe, .hageziLight].contains(self) }
 }
 
 /// When to download fresh lists, and which downloads to trust.
@@ -144,7 +154,7 @@ enum FilterListUpdates {
 
     /// The text, when it is a usable copy of `list`.
     static func accept(_ text: String, for list: FilterList) -> String? {
-        if list.isEasyList { return accept(text) != nil ? text : nil }
+        if list.isDomainList { return accept(text) != nil ? text : nil }
         // uBO's lists open with their title; a broken server sends a page.
         guard text.hasPrefix("! Title:") || text.hasPrefix("[Adblock") else { return nil }
         let rules = text.split(separator: "\n").filter { !$0.hasPrefix("!") }.count
@@ -397,6 +407,10 @@ final class ContentBlocker {
                     if rule.exception { exceptions.append(rule.json) } else { blocks.append(rule.json) }
                 }
             }
+            // Lists overlap (a tracker on two lists): each rule once, in order.
+            var seen = Set<String>()
+            blocks = blocks.filter { seen.insert($0).inserted }
+            exceptions = exceptions.filter { seen.insert($0).inserted }
             let room = max(10_000, maxRulesPerList - exceptions.count)
             var parts: [String] = []
             var start = 0
@@ -422,8 +436,9 @@ final class ContentBlocker {
         NSLog("Content blocking: %@ pattern rules refused, using domain rules only", category.rawValue)
         for index in parts.indices { await store.remove(prefix + String(index)) }
         let json = await Task.detached(priority: .utility) { () -> String in
-            let blocks = sources.flatMap { $0.domains.blockRules() }
-            let exceptions = sources.flatMap { $0.domains.exceptionRules() }
+            var seen = Set<String>()
+            let blocks = sources.flatMap { $0.domains.blockRules() }.filter { seen.insert($0).inserted }
+            let exceptions = sources.flatMap { $0.domains.exceptionRules() }.filter { seen.insert($0).inserted }
             return "[" + (blocks + exceptions).joined(separator: ",") + "]"
         }.value
         return await store.compile(fallback, json).map { [$0] } ?? []
