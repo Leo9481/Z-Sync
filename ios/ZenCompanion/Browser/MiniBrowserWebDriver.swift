@@ -18,9 +18,14 @@ enum PrivateBrowsing {
     static func dataStore(_ id: UUID) -> WKWebsiteDataStore {
         if let store = stores[id] { return store }
         let fresh = WKWebsiteDataStore.nonPersistent()
+        // Through the browser VPN too, when it's on.
+        BrowserVPN.shared.configure(fresh)
         stores[id] = fresh
         return fresh
     }
+
+    /// The private stores in use, for the browser VPN.
+    static var liveStores: [WKWebsiteDataStore] { Array(stores.values) }
 
     /// Earlier builds kept each private page's data in an on-disk store.
     /// Those are deleted, a moment after launch: asked while WebKit is still

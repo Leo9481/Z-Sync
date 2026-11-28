@@ -514,6 +514,11 @@ struct MiniBrowserChrome<NavBar: View>: View {
             siteSettingsRow
                 .liftCard(scheme)
 
+            if !BrowserVPN.shared.usableProfiles.isEmpty {
+                vpnRow
+                    .liftCard(scheme)
+            }
+
             actionRow
 
             if model.showPinBanner, canSave {
@@ -1027,6 +1032,65 @@ struct MiniBrowserChrome<NavBar: View>: View {
         }
         .buttonStyle(CardPressStyle())
         .disabled(model.blockingHost == nil)
+    }
+
+    /// The browser VPN at a glance: off, or the profile in use, and a menu
+    /// to switch. Only there once a profile has servers.
+    @ViewBuilder
+    private var vpnRow: some View {
+        let vpn = BrowserVPN.shared
+        let current = vpn.isEnabled ? vpn.activeProfile?.name : nil
+        Menu {
+            Button {
+                vpn.isEnabled = false
+            } label: {
+                if current == nil {
+                    Label("Off", systemImage: "checkmark")
+                } else {
+                    Text(verbatim: "Off")
+                }
+            }
+            ForEach(vpn.usableProfiles) { profile in
+                Button {
+                    vpn.use(profile.id)
+                } label: {
+                    if vpn.isEnabled, profile.id == vpn.activeProfile?.id {
+                        Label(profile.name, systemImage: "checkmark")
+                    } else {
+                        Text(verbatim: profile.name)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: current == nil ? "lock.shield" : "lock.shield.fill")
+                    .font(.system(size: 16, weight: .semibold))
+                    .frame(width: 24)
+                    .foregroundStyle(Color.primary)
+                Text(verbatim: "VPN")
+                    .zenFont(16, weight: .medium, design: .rounded)
+                    .foregroundStyle(Color.primary)
+                Spacer(minLength: 8)
+                Text(verbatim: vpnStatusText(vpn, current: current))
+                    .zenFont(15, design: .rounded)
+                    .foregroundStyle(Color.primary.opacity(0.6))
+                    .lineLimit(1)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.primary.opacity(0.35))
+            }
+            .padding(.horizontal, 14)
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .menuOrder(.fixed)
+        .buttonStyle(CardPressStyle())
+    }
+
+    private func vpnStatusText(_ vpn: BrowserVPN, current: String?) -> String {
+        guard let current else { return "Off" }
+        if case .connecting = vpn.status { return "\(current)\u{2026}" }
+        return current
     }
 
     private var rowDivider: some View {

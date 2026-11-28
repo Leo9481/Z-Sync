@@ -76,6 +76,17 @@ struct HomeView: View {
             }
             .presentationBackground(Color(red: 251/255, green: 251/255, blue: 252/255))
         }
+        .alert(
+            Text(verbatim: "Browser VPN turned off"),
+            isPresented: Binding(
+                get: { BrowserVPN.shared.allFailedMessage != nil },
+                set: { if !$0 { BrowserVPN.shared.allFailedMessage = nil } }
+            )
+        ) {
+            Button("common.done", role: .cancel) {}
+        } message: {
+            Text(verbatim: BrowserVPN.shared.allFailedMessage ?? "")
+        }
         .sheet(isPresented: $model.showSignInHelp) {
             SignInHelpSheet()
         }
