@@ -23,7 +23,9 @@ enum CosmeticFilter {
         controller.addUserScript(WKUserScript(
             source: script,
             injectionTime: .atDocumentStart,
-            forMainFrameOnly: true,
+            // Players and their overlays sit in frames; each frame asks
+            // for the rules of its own address.
+            forMainFrameOnly: false,
             in: world
         ))
     }

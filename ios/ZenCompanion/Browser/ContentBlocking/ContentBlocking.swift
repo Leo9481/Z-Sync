@@ -424,6 +424,7 @@ final class ContentBlocker {
                     if rule.exception { exceptions.append(rule.json) } else { blocks.append(rule.json) }
                 }
             }
+            if category == .ads { blocks += NetworkFilters.builtInAds.map(\.json) }
             // Lists overlap (a tracker on two lists): each rule once, in order.
             var seen = Set<String>()
             blocks = blocks.filter { seen.insert($0).inserted }
