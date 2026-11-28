@@ -137,6 +137,9 @@ enum FilterList: String, CaseIterable, Sendable {
     /// Lists made mostly of domain rules, checked by how many they hold; uBO's
     /// lists are mostly patterns and exceptions, so they are checked by size.
     var isDomainList: Bool { [.easylist, .easyprivacy, .peterLowe, .hageziLight].contains(self) }
+
+    /// uBlock Origin's own lists, which uBO trusts with its trusted scriptlets.
+    var isUBlockOrigin: Bool { rawValue.hasPrefix("ublock-") }
 }
 
 /// When to download fresh lists, and which downloads to trust.
@@ -387,11 +390,19 @@ final class ContentBlocker {
         lastModified = loaded[.easylist]?.lastModified
 
         // The ad lists' hiding rules go to the cosmetic engine (adblock-rust).
-        let cosmetic = FilterList.allCases
-            .filter { $0.categories.contains(.ads) }
-            .compactMap { texts[$0] }
-            .joined(separator: "\n")
-        if !cosmetic.isEmpty { CosmeticEngine.shared.load(cosmetic) }
+        // uBlock Origin's own lists are trusted, as uBO trusts them: their
+        // rules may use uBO's trusted scriptlets. The others may not.
+        let cosmeticLists = FilterList.allCases.filter { $0.categories.contains(.ads) || $0 == .ublockPrivacy }
+        let trusted = cosmeticLists.filter(\.isUBlockOrigin).compactMap { texts[$0] }.joined(separator: "\n")
+        let cosmetic = cosmeticLists.filter { !$0.isUBlockOrigin }.compactMap { texts[$0] }.joined(separator: "\n")
+        if !cosmetic.isEmpty || !trusted.isEmpty {
+            // uBlock Origin's scriptlets, built by CI from a pinned release.
+            let scriptlets = await Task.detached(priority: .utility) {
+                Bundle.main.url(forResource: "scriptlets", withExtension: "json")
+                    .flatMap { try? String(contentsOf: $0, encoding: .utf8) }
+            }.value
+            CosmeticEngine.shared.load(trusted: trusted, cosmetic, resources: scriptlets)
+        }
 
         var compiled: [BlockCategory: [WKContentRuleList]] = [:]
         for category in [BlockCategory.ads, .trackers] {

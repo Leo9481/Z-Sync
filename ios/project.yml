@@ -50,6 +50,10 @@ targets:
       - path: ZenCompanion/Vendor/filters/ublock-unbreak.txt
         buildPhase: resources
         optional: true
+      # uBlock Origin's scriptlets as adblock-rust resources, built by CI.
+      - path: ZenCompanion/Vendor/scriptlets.json
+        buildPhase: resources
+        optional: true
       # Domain lists: Peter Lowe's and HaGeZi's Multi LIGHT (GPLv3).
       - path: ZenCompanion/Vendor/filters/peter-lowe.txt
         buildPhase: resources

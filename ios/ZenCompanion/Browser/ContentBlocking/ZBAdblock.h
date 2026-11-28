@@ -5,9 +5,13 @@
 
 typedef struct ZbEngine ZbEngine;
 
-/// An engine with the cosmetic rules of one or more filter lists.
-ZbEngine * _Nullable zb_engine_new(const char * _Nonnull list_text);
+/// An engine with the cosmetic rules of uBlock Origin's own lists (trusted,
+/// may be NULL) and of the other lists.
+ZbEngine * _Nullable zb_engine_new(const char * _Nullable trusted_text, const char * _Nonnull list_text);
 void zb_engine_free(ZbEngine * _Nullable engine);
+
+/// Loads scriptlet resources (a JSON array); returns how many, or -1.
+int zb_engine_use_resources(ZbEngine * _Nonnull engine, const char * _Nonnull resources_json);
 
 /// The page's hiding resources as JSON; free with zb_string_free.
 char * _Nullable zb_engine_url_cosmetic(const ZbEngine * _Nonnull engine, const char * _Nonnull url);

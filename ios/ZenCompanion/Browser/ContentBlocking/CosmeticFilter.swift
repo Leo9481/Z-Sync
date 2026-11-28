@@ -160,12 +160,44 @@ final class CosmeticEngine: @unchecked Sendable {
     private let queue = DispatchQueue(label: "io.github.leo9481.zenbrowser.cosmetic", qos: .userInitiated)
     private var engine: OpaquePointer?
 
-    /// Replaces the engine with one built from `listText` (lists joined by newlines).
-    func load(_ listText: String) {
-        queue.async {
-            let built = listText.withCString { zb_engine_new($0) }
-            if let old = self.engine { zb_engine_free(old) }
-            self.engine = built
+    /// Replaces the engine with one built from `listText` (lists joined by
+    /// newlines) and given `resources` (uBO's scriptlets, a JSON array). Built
+    /// off the queue and swapped in at the end, so a page asking for its
+    /// scriptlets never waits behind a rebuild.
+    func load(trusted: String, _ listText: String, resources: String?) {
+        DispatchQueue.global(qos: .utility).async {
+            let made = trusted.withCString { trustedText in
+                listText.withCString { zb_engine_new(trusted.isEmpty ? nil : trustedText, $0) }
+            }
+            guard let built = made else { return }
+            if let resources {
+                let count = resources.withCString { zb_engine_use_resources(built, $0) }
+                if count < 0 { NSLog("Cosmetic engine: scriptlet resources unreadable") }
+            }
+            self.queue.async {
+                if let old = self.engine { zb_engine_free(old) }
+                self.engine = built
+            }
+        }
+    }
+
+    /// The scriptlets the lists name for a page on `host`, ready to run in the
+    /// page's world at document start, or nil when there are none. Asked
+    /// while a page starts loading; quick once the engine is built.
+    func scriptlets(forHost host: String) -> String? {
+        queue.sync {
+            guard let engine = self.engine,
+                  let json = "https://\(host)/".withCString({ zb_engine_url_cosmetic(engine, $0) })
+            else { return nil }
+            let text = String(cString: json)
+            zb_string_free(json)
+            guard let object = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any],
+                  let code = object["injected_script"] as? String,
+                  !code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else { return nil }
+            // uBO's scriptlets keep shared state in `scriptletGlobals`, which
+            // uBO's own injector provides; so does this wrapper.
+            return "(function () {\nconst scriptletGlobals = {};\n" + code + "\n})();"
         }
     }
 
