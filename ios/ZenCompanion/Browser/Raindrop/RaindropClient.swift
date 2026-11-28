@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import SwiftUI
 
 /// A Raindrop.io collection, with where it sits in the tree.
 struct RaindropCollection: Identifiable, Hashable, Sendable {
@@ -276,5 +277,31 @@ final class RaindropSettings {
         }
         add(parent: nil, depth: 0)
         return out
+    }
+}
+
+/// The collections as a menu that follows the tree: a collection with
+/// sub-collections is a submenu that starts with "Save here", one without
+/// is a single choice. Indenting a flat list with spaces doesn't read in a
+/// menu, and two collections may share a name in different places.
+struct RaindropCollectionMenu: View {
+    /// nil for the top level.
+    var parentID: Int? = nil
+    let collections: [RaindropCollection]
+    let choose: (Int) -> Void
+
+    var body: some View {
+        ForEach(collections.filter { $0.parentID == parentID }) { collection in
+            if collections.contains(where: { $0.parentID == collection.id }) {
+                Menu(collection.title) {
+                    Button("Save here", systemImage: "tray.and.arrow.down") { choose(collection.id) }
+                    Divider()
+                    // A view inside its own body: erased, so its type can refer to itself.
+                    AnyView(RaindropCollectionMenu(parentID: collection.id, collections: collections, choose: choose))
+                }
+            } else {
+                Button(collection.title) { choose(collection.id) }
+            }
+        }
     }
 }

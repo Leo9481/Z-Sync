@@ -719,11 +719,7 @@ private struct RaindropSettingsPage: View {
                     SettingsRow(title: "Save to", systemImage: "tray.and.arrow.down", scheme: scheme) {
                         Menu {
                             Button("Unsorted") { raindrop.defaultCollectionID = RaindropCollection.unsorted }
-                            ForEach(raindrop.collectionTree) { entry in
-                                Button(String(repeating: "   ", count: entry.depth) + entry.collection.title) {
-                                    raindrop.defaultCollectionID = entry.collection.id
-                                }
-                            }
+                            RaindropCollectionMenu(collections: raindrop.collections) { raindrop.defaultCollectionID = $0 }
                         } label: {
                             SettingsMenuValue(text: raindrop.defaultCollectionName, scheme: scheme)
                         }

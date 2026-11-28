@@ -1529,14 +1529,9 @@ struct MiniBrowserTopBar: View {
     private var raindropButton: some View {
         let raindrop = RaindropSettings.shared
         let saved = model.raindropID != nil
-        let tree = raindrop.collectionTree
         return Menu {
             Button("Unsorted") { model.saveToRaindrop(collection: RaindropCollection.unsorted) }
-            ForEach(tree) { entry in
-                Button(String(repeating: "   ", count: entry.depth) + entry.collection.title) {
-                    model.saveToRaindrop(collection: entry.collection.id)
-                }
-            }
+            RaindropCollectionMenu(collections: raindrop.collections) { model.saveToRaindrop(collection: $0) }
         } label: {
             Image(systemName: saved ? "cloud.fill" : "cloud")
                 .font(.system(size: Self.pillGlyphSize, weight: .semibold))
@@ -1548,6 +1543,9 @@ struct MiniBrowserTopBar: View {
             model.toggleRaindrop()
         }
         .menuStyle(.button)
+        // As written, top to bottom: from a button at the bottom of the
+        // screen iOS would otherwise turn the list upside down.
+        .menuOrder(.fixed)
         .buttonStyle(GlyphPressStyle())
         .disabled(model.isPrivate)
         .accessibilityLabel(Text(verbatim: saved ? "Remove from Raindrop" : "Save to Raindrop"))
