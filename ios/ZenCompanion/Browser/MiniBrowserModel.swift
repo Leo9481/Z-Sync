@@ -779,6 +779,10 @@ final class MiniBrowserModel {
         webView?.load(URLRequest(url: url))
     }
 
+    /// Set while this page is a popup whose first page hasn't shown yet: the
+    /// host of the page that opened it ("" when unknown). See `PopupBlocking`.
+    @ObservationIgnored var popupOpenerHost: String?
+
     /// The page's bookmark in Raindrop, if it is saved there.
     var raindropID: Int?
     var raindropSaving = false

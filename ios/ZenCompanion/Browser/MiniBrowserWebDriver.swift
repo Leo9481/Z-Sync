@@ -180,6 +180,14 @@ final class MiniBrowserWebDriver: NSObject, WKNavigationDelegate, WKUIDelegate {
             handOff(url)
             return nil
         }
+        // An ad by the filter lists: refused whatever opened it, a sized
+        // window or a tapped link included (popunders use both).
+        if let url, MainActor.assumeIsolated({
+            ContentBlocker.shared.blocksPopup(url, openerHost: webView.url?.host)
+        }) {
+            MainActor.assumeIsolated { model?.showBlockedNavigation(to: url, popup: true) }
+            return nil
+        }
         if let url, PopupBlocking.blocksPopup(
             linkTapped: navigationAction.navigationType == .linkActivated,
             from: webView.url,
@@ -411,6 +419,16 @@ final class MiniBrowserWebDriver: NSObject, WKNavigationDelegate, WKUIDelegate {
         // `<a download>`, `blob:` files included.
         if navigationAction.shouldPerformDownload {
             decisionHandler(.download, preferences)
+            return
+        }
+        // A popup still on its way to its first page: sent to an ad (often
+        // after opening blank), it closes instead.
+        if navigationAction.targetFrame?.isMainFrame ?? true,
+           let url = navigationAction.request.url,
+           let model, let opener = MainActor.assumeIsolated({ model.popupOpenerHost }),
+           MainActor.assumeIsolated({ ContentBlocker.shared.blocksPopup(url, openerHost: opener.isEmpty ? nil : opener) }) {
+            decisionHandler(.cancel, preferences)
+            MainActor.assumeIsolated { model.host?.popupWasBlocked(model, url: url) }
             return
         }
         if navigationAction.targetFrame?.isMainFrame ?? true,
@@ -760,6 +778,11 @@ final class MiniBrowserWebDriver: NSObject, WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        // A popup's first web page is on screen: from here it's a page like
+        // any other. A blank window it opened with doesn't count.
+        if let scheme = webView.url?.scheme?.lowercased(), scheme == "http" || scheme == "https" {
+            MainActor.assumeIsolated { model?.popupOpenerHost = nil }
+        }
         // A committed document is on screen: the chrome starts over for it,
         // even when it is the previous page coming back. Every commit counts
         // as a new document for the colour, so a reload of the same address

@@ -20,6 +20,9 @@ struct BlockList: Sendable {
     let allowedOn: [String: Set<String>]
     /// Sites the list leaves alone entirely (`$document` exceptions).
     let allowedPages: Set<String>
+    /// Blocked only as popups (`||ads.example^$popup`): ad pages a tap
+    /// would open in a new window.
+    var popupOnly: Set<String> = []
     /// The list's own version line, e.g. `202610242150`.
     let version: String?
     /// The list's "Last modified" line, e.g. `24 Oct 2026 21:50 UTC`.
@@ -46,6 +49,15 @@ struct BlockList: Sendable {
         return true
     }
 
+    /// True when a new window to `host` is an ad: the host is blocked by the
+    /// list, or blocked as a popup, and no exception lets it through.
+    func blocksPopup(host: String, openerHost: String?) -> Bool {
+        let request = Self.normalized(host)
+        if blocks(requestHost: request, pageHost: openerHost) { return true }
+        guard Self.matchesSuffix(request, popupOnly) else { return false }
+        return !Self.matchesSuffix(request, allowedEverywhere)
+    }
+
     // MARK: - Parsing
 
     /// Request types a rule may be limited to. Both apps block a domain for
@@ -64,6 +76,7 @@ struct BlockList: Sendable {
         var allowedFirstParty = Set<String>()
         var allowedOn: [String: Set<String>] = [:]
         var allowedPages = Set<String>()
+        var popupOnly = Set<String>()
         var version: String?
         var lastModified: String?
 
@@ -78,16 +91,25 @@ struct BlockList: Sendable {
 
             if !rule.exception {
                 var onlyThirdParty = false
+                var popup = false
                 for option in rule.options {
                     if option == "third-party" || option == "3p" {
                         onlyThirdParty = true
+                    } else if option == "popup" {
+                        popup = true
                     } else if option != "all" && option != "important" {
                         // Some request types only, popups, page blocks,
                         // one-site rules, redirects: not ours.
                         return
                     }
                 }
-                if onlyThirdParty { thirdParty.insert(rule.domain) } else { anywhere.insert(rule.domain) }
+                if popup {
+                    popupOnly.insert(rule.domain)
+                } else if onlyThirdParty {
+                    thirdParty.insert(rule.domain)
+                } else {
+                    anywhere.insert(rule.domain)
+                }
                 return
             }
 
@@ -112,7 +134,7 @@ struct BlockList: Sendable {
             // Element hiding and the like: nothing to undo here.
         }
 
-        return BlockList(
+        var list = BlockList(
             anywhere: anywhere,
             thirdParty: thirdParty,
             allowedEverywhere: allowedEverywhere,
@@ -122,6 +144,8 @@ struct BlockList: Sendable {
             version: version,
             lastModified: lastModified
         )
+        list.popupOnly = popupOnly
+        return list
     }
 
     /// `||domain^` or `@@||domain^`, with the options after `$`.

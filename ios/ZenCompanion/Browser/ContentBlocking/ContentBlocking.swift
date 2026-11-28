@@ -286,6 +286,16 @@ final class ContentBlocker {
         }
     }
 
+    /// True when a new window to `url`, opened by a page on `openerHost`, is
+    /// an ad by the lists of a switch that is on for that page.
+    func blocksPopup(_ url: URL, openerHost: String?) -> Bool {
+        guard let host = url.host, ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return false }
+        return lists.contains { entry in
+            entry.key.categories.contains { settings.isOn($0, host: openerHost) }
+                && entry.value.blocksPopup(host: host, openerHost: openerHost)
+        }
+    }
+
     /// What a web view needs for a page on `host`; `original` turns blocking off.
     func configuration(host: String?, original: Bool) -> BlockingConfiguration {
         if original { return BlockingConfiguration(ruleLists: [], consentSkip: nil) }
