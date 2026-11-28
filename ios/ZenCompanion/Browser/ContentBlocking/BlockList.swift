@@ -236,35 +236,47 @@ struct BlockList: Sendable {
     /// The list as a WebKit content rule list: blocks first, exceptions after,
     /// because `ignore-previous-rules` only undoes rules above it.
     func contentRuleListJSON() -> String {
+        "[" + (blockRules() + exceptionRules()).joined(separator: ",") + "]"
+    }
+
+    /// The domain blocks as WebKit rules (JSON objects).
+    func blockRules() -> [String] {
         var rules: [String] = []
-        rules.reserveCapacity(ruleCount + allowedOn.count + 16)
-
-        func filter(_ domain: String) -> String {
-            "^[^:]+://+([^:/]+\\\\.)?" + domain.replacingOccurrences(of: ".", with: "\\\\.") + "[:/]"
-        }
-        func quoted(_ values: [String]) -> String {
-            "[" + values.map { "\"*\($0)\"" }.joined(separator: ",") + "]"
-        }
+        rules.reserveCapacity(ruleCount)
         let types = "[" + Self.resourceTypes.map { "\"\($0)\"" }.joined(separator: ",") + "]"
-
         for domain in anywhere.sorted() {
-            rules.append(#"{"trigger":{"url-filter":"\#(filter(domain))","resource-type":\#(types)},"action":{"type":"block"}}"#)
+            rules.append(#"{"trigger":{"url-filter":"\#(Self.filter(domain))","resource-type":\#(types)},"action":{"type":"block"}}"#)
         }
         for domain in thirdParty.sorted() {
-            rules.append(#"{"trigger":{"url-filter":"\#(filter(domain))","resource-type":\#(types),"load-type":["third-party"]},"action":{"type":"block"}}"#)
+            rules.append(#"{"trigger":{"url-filter":"\#(Self.filter(domain))","resource-type":\#(types),"load-type":["third-party"]},"action":{"type":"block"}}"#)
         }
+        return rules
+    }
+
+    /// The exceptions as WebKit rules (JSON objects); they go after every block.
+    func exceptionRules() -> [String] {
+        var rules: [String] = []
         for domain in allowedEverywhere.sorted() {
-            rules.append(#"{"trigger":{"url-filter":"\#(filter(domain))"},"action":{"type":"ignore-previous-rules"}}"#)
+            rules.append(#"{"trigger":{"url-filter":"\#(Self.filter(domain))"},"action":{"type":"ignore-previous-rules"}}"#)
         }
         for domain in allowedFirstParty.sorted() {
-            rules.append(#"{"trigger":{"url-filter":"\#(filter(domain))","load-type":["first-party"]},"action":{"type":"ignore-previous-rules"}}"#)
+            rules.append(#"{"trigger":{"url-filter":"\#(Self.filter(domain))","load-type":["first-party"]},"action":{"type":"ignore-previous-rules"}}"#)
         }
         for (domain, sites) in allowedOn.sorted(by: { $0.key < $1.key }) {
-            rules.append(#"{"trigger":{"url-filter":"\#(filter(domain))","if-domain":\#(quoted(sites.sorted()))},"action":{"type":"ignore-previous-rules"}}"#)
+            rules.append(#"{"trigger":{"url-filter":"\#(Self.filter(domain))","if-domain":\#(Self.quoted(sites.sorted()))},"action":{"type":"ignore-previous-rules"}}"#)
         }
         if !allowedPages.isEmpty {
-            rules.append(#"{"trigger":{"url-filter":".*","if-domain":\#(quoted(allowedPages.sorted()))},"action":{"type":"ignore-previous-rules"}}"#)
+            rules.append(#"{"trigger":{"url-filter":".*","if-domain":\#(Self.quoted(allowedPages.sorted()))},"action":{"type":"ignore-previous-rules"}}"#)
         }
-        return "[" + rules.joined(separator: ",") + "]"
+        return rules
+    }
+
+    private static func filter(_ domain: String) -> String {
+        // Already escaped for JSON: `\\.` in the file is `\.` in the regex.
+        "^[^:]+://+([^:/]+\\\\.)?" + domain.replacingOccurrences(of: ".", with: "\\\\.") + "[:/]"
+    }
+
+    private static func quoted(_ values: [String]) -> String {
+        "[" + values.map { "\"*\($0)\"" }.joined(separator: ",") + "]"
     }
 }
