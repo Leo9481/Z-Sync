@@ -377,8 +377,16 @@ struct SpacesBrowserView: View {
                 .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
-        .compositingGroup()
-        .shadow(color: .black.opacity(0.25), radius: 16)
+        // The shadow comes from a plain rectangle behind the sidebar, not
+        // from the sidebar itself: a shadow of the whole sidebar meant
+        // drawing all of it off screen and blurring that on every frame of
+        // the slide. The sidebar is opaque, so only the edge shows either way.
+        .background {
+            Rectangle()
+                .fill(Palette.background(scheme))
+                .shadow(color: .black.opacity(0.25), radius: 16)
+                .ignoresSafeArea()
+        }
         .transition(.move(edge: .leading))
         .zIndex(1)
         }

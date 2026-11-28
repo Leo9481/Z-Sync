@@ -73,7 +73,7 @@ struct MiniBrowserView: View {
     /// The deck's cards above the page's own; see `OpenPagesOverview`.
     @State private var aheadReveal: CGFloat = 1
     /// How far the overview's grid is scrolled.
-    @State private var gridScroll: CGFloat = 0
+    @State private var gridScroll = GridScrollPosition()
     /// A new page from the deck: its address field waits until it has flown in.
     @State private var holdsNewPageSearch = false
     /// A new deck each time the page leaves for it, with the order fresh.
@@ -571,7 +571,7 @@ struct MiniBrowserView: View {
             reveal: overviewReveal,
             topInset: pageFrame.minY,
             bottomClearance: overviewBottomClearance,
-            scroll: $gridScroll,
+            position: gridScroll,
             onOpen: closeOverview(to:)
         )
     }
@@ -602,7 +602,7 @@ struct MiniBrowserView: View {
     /// before the page flies to its card.
     private func scrollGridToActivePage() {
         guard screenSize.width > 0 else { return }
-        gridScroll = gridGeometry().scroll(showing: activeDeckIndex)
+        gridScroll.offset = gridGeometry().scroll(showing: activeDeckIndex)
     }
 
     /// A card's pose for the page: where the page has to be to lie on it.
@@ -634,7 +634,10 @@ struct MiniBrowserView: View {
     private var floatingPageShadow: some View {
         if pageFloats {
             // In the page's own color: a new page has nothing painted yet.
-            floatingPageShape
+            // Its corners stay put while the page's top ones round on the
+            // way, so the blur is drawn once and only moves with the page;
+            // under a 20-point blur the difference does not show.
+            RoundedRectangle(cornerRadius: pagePose.corner, style: .continuous)
                 .fill(sheetBackground)
                 .shadow(color: .black.opacity(0.26), radius: 20, x: -4.4, y: 0)
                 .opacity(Double(overviewReveal))
@@ -891,7 +894,7 @@ private extension MiniBrowserView {
     /// Where the page has to be to lie exactly on its card.
     private func cardPose() -> PageCardPose? {
         guard screenSize.width > 0, screenSize.height > 0 else { return nil }
-        return pose(for: gridGeometry().frame(index: activeDeckIndex, scroll: gridScroll))
+        return pose(for: gridGeometry().frame(index: activeDeckIndex, scroll: gridScroll.offset))
     }
 
     /// The finger took hold of the page: the deck goes in behind it right
@@ -1205,7 +1208,7 @@ private extension MiniBrowserView {
         let count = pages.pages.count
         let grid = gridGeometry(count: count)
         // Where its card goes in the grid: after the last one.
-        return pose(for: grid.frame(index: max(0, count - 1), scroll: gridScroll))
+        return pose(for: grid.frame(index: max(0, count - 1), scroll: gridScroll.offset))
     }
 
     /// A blank sheet comes in from the right and grows to the whole screen.
