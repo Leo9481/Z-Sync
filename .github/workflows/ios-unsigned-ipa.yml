@@ -50,6 +50,19 @@ jobs:
           cp "$RUNNER_TEMP/darkreader/package/LICENSE" ZenCompanion/Vendor/darkreader-LICENSE.txt || true
           ls -lh ZenCompanion/Vendor
 
+      - name: Build the ad-block engine (Brave's adblock-rust, MPL-2.0)
+        working-directory: rust/zb-adblock
+        env:
+          IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+        run: |
+          set -euo pipefail
+          rustup toolchain install stable --profile minimal --target aarch64-apple-ios
+          rustup default stable
+          cargo build --release --target aarch64-apple-ios
+          mkdir -p ../../ios/ZenCompanion/Vendor/adblock
+          cp target/aarch64-apple-ios/release/libzb_adblock.a ../../ios/ZenCompanion/Vendor/adblock/
+          ls -lh ../../ios/ZenCompanion/Vendor/adblock
+
       - name: Fetch filter lists (uBlock Origin, Peter Lowe, HaGeZi)
         # Bundled so a fresh install blocks with them at once; the app
         # downloads newer copies weekly. A failed download leaves the list

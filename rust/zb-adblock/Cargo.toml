@@ -1,0 +1,25 @@
+[package]
+name = "zb-adblock"
+version = "0.1.0"
+edition = "2021"
+description = "Z-Browser's C interface to Brave's adblock-rust, for cosmetic filtering on iOS"
+license = "MPL-2.0"
+publish = false
+
+[lib]
+name = "zb_adblock"
+crate-type = ["staticlib"]
+
+[dependencies]
+# Pinned: the engine's API and cache format change between minor versions.
+# `single-thread` (a default) is left out so the engine can be used from one
+# serial queue whose thread may change.
+adblock = { version = "=0.13.6", default-features = false, features = ["embedded-domain-resolver", "full-regex-handling"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+# A panic must never unwind into Swift.
+panic = "abort"

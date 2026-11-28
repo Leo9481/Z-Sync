@@ -1400,6 +1400,15 @@ final class MiniBrowserModel {
         if darkMode {
             WebsiteDarkMode.addScript(to: controller)
         }
+        if cosmeticFilteringApplies {
+            CosmeticFilter.addScript(to: controller)
+        }
+    }
+
+    /// Ad boxes are hidden where ads are blocked: the Ads switch is on for
+    /// the site, and the page isn't shown as the original.
+    var cosmeticFilteringApplies: Bool {
+        originalPage == nil && blocker.settings.isOn(.ads, host: blockingHost)
     }
 
     // MARK: - Dark mode for websites

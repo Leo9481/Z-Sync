@@ -34,3 +34,6 @@ plans/
 
 # Fetched by CI (see .github/workflows/ios-unsigned-ipa.yml)
 ios/ZenCompanion/Vendor/
+
+# Rust build output (the ad-block engine is built by CI)
+rust/zb-adblock/target/
