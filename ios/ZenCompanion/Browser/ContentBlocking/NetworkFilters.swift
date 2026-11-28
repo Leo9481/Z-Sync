@@ -30,7 +30,22 @@ enum NetworkFilters {
     }
 
     /// Bump when the conversion changes, so compiled lists are made again.
-    static let version = 1
+    static let version = 2
+
+    /// Rules of our own, on top of the lists, for the Ads switch.
+    ///
+    /// Popunder and overlay ad networks load their script from throwaway
+    /// domains that change every few days, faster than any domain list:
+    /// `https://ns.random-words.com/r6fisEJrR5zLry/142161`. uBlock Origin's
+    /// Quick fixes list matches that shape with a regex, but only on a few
+    /// sites; here it applies everywhere, as a third-party script only, in
+    /// WebKit's regex subset (no `{n,m}`, so the counts are spelled out).
+    static let builtInAds: [Rule] = [
+        Rule(
+            trigger: #"{"url-filter":"^https?://([a-z][a-z]*\\.)?[a-z0-9][a-z0-9][a-z0-9][a-z0-9][a-z0-9][a-z0-9]*\\.[a-z][a-z][a-z][a-z]*/[a-z][0-9A-Za-z][0-9A-Za-z][0-9A-Za-z][0-9A-Za-z][0-9A-Za-z][0-9A-Za-z][0-9A-Za-z][0-9A-Za-z][0-9A-Za-z][0-9A-Za-z]*/[0-9][0-9][0-9][0-9][0-9]?[0-9]?$","url-filter-is-case-sensitive":true,"resource-type":["script"],"load-type":["third-party"]}"#,
+            exception: false
+        ),
+    ]
 
     /// What WebKit blocks when a rule names no type: never pages themselves
     /// or popups, so a tapped link always opens.

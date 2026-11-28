@@ -128,7 +128,10 @@ targets:
         CURRENT_PROJECT_VERSION: "7"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # Page translation needs iOS 18; the app still starts on iOS 17.
-        OTHER_LDFLAGS: "$(inherited) -weak_framework Translation"
+        # zb_adblock: Brave's adblock-rust (rust/zb-adblock), built by CI.
+        OTHER_LDFLAGS: "$(inherited) -weak_framework Translation -lzb_adblock"
+        LIBRARY_SEARCH_PATHS: "$(inherited) $(SRCROOT)/ZenCompanion/Vendor/adblock"
+        SWIFT_OBJC_BRIDGING_HEADER: ZenCompanion/Browser/ContentBlocking/ZBAdblock.h
     dependencies:
       - target: ShareExtension
         embed: true

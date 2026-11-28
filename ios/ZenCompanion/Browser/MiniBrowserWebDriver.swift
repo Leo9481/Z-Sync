@@ -123,6 +123,12 @@ final class MiniBrowserWebDriver: NSObject, WKNavigationDelegate, WKUIDelegate {
             contentWorld: PageTranslationScript.world,
             name: PageTranslationScript.handlerName
         )
+        // Cosmetic filtering asks for each page's hiding rules.
+        configuration.userContentController.addScriptMessageHandler(
+            CosmeticFilter.Handler(model: model),
+            contentWorld: CosmeticFilter.world,
+            name: CosmeticFilter.handlerName
+        )
         // The blocked count's reports. The lists and scripts themselves go on
         // per page, in `decidePolicyFor`.
         configuration.userContentController.add(

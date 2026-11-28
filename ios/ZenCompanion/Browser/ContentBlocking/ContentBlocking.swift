@@ -338,6 +338,13 @@ final class ContentBlocker {
         lists = loaded
         lastModified = loaded[.easylist]?.lastModified
 
+        // The ad lists' hiding rules go to the cosmetic engine (adblock-rust).
+        let cosmetic = FilterList.allCases
+            .filter { $0.categories.contains(.ads) }
+            .compactMap { texts[$0] }
+            .joined(separator: "\n")
+        if !cosmetic.isEmpty { CosmeticEngine.shared.load(cosmetic) }
+
         var compiled: [BlockCategory: [WKContentRuleList]] = [:]
         for category in [BlockCategory.ads, .trackers] {
             let sources = FilterList.allCases.compactMap { list -> RuleSource? in
@@ -417,6 +424,7 @@ final class ContentBlocker {
                     if rule.exception { exceptions.append(rule.json) } else { blocks.append(rule.json) }
                 }
             }
+            if category == .ads { blocks += NetworkFilters.builtInAds.map(\.json) }
             // Lists overlap (a tracker on two lists): each rule once, in order.
             var seen = Set<String>()
             blocks = blocks.filter { seen.insert($0).inserted }
