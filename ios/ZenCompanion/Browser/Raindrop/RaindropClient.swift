@@ -264,8 +264,12 @@ final class RaindropSettings {
     /// Collections in tree order with their depth, for menus.
     var collectionTree: [TreeEntry] {
         var out: [TreeEntry] = []
+        // Each collection once, however the lists came back, and no loop
+        // even if a collection were listed under itself.
+        var placed = Set<Int>()
         func add(parent: Int?, depth: Int) {
-            for collection in collections.filter({ $0.parentID == parent }) {
+            for collection in collections where collection.parentID == parent {
+                guard placed.insert(collection.id).inserted else { continue }
                 out.append(TreeEntry(collection: collection, depth: depth))
                 add(parent: collection.id, depth: depth + 1)
             }

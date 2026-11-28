@@ -1529,13 +1529,12 @@ struct MiniBrowserTopBar: View {
     private var raindropButton: some View {
         let raindrop = RaindropSettings.shared
         let saved = model.raindropID != nil
+        let tree = raindrop.collectionTree
         return Menu {
-            Section("Save to") {
-                Button("Unsorted") { model.saveToRaindrop(collection: RaindropCollection.unsorted) }
-                ForEach(raindrop.collectionTree) { entry in
-                    Button(String(repeating: "   ", count: entry.depth) + entry.collection.title) {
-                        model.saveToRaindrop(collection: entry.collection.id)
-                    }
+            Button("Unsorted") { model.saveToRaindrop(collection: RaindropCollection.unsorted) }
+            ForEach(tree) { entry in
+                Button(String(repeating: "   ", count: entry.depth) + entry.collection.title) {
+                    model.saveToRaindrop(collection: entry.collection.id)
                 }
             }
         } label: {
