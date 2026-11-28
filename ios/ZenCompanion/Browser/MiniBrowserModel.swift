@@ -1402,6 +1402,7 @@ final class MiniBrowserModel {
         }
         if cosmeticFilteringApplies {
             CosmeticFilter.addScript(to: controller)
+            BuiltInScriptlets.addScript(to: controller)
         }
     }
 
