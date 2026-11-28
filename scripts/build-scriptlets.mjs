@@ -29,8 +29,11 @@ const taken = new Set();
 for (const entry of scriptlets) {
   if (!entry || typeof entry.name !== 'string' || typeof entry.fn !== 'function') { continue; }
   const code = entry.fn.toString();
-  // adblock-rust recognises function-style resources by this shape only.
-  if (!/^function\s+[^\s(){}]+\s*\(/.test(code)) {
+  const helper = entry.name.endsWith('.fn');
+  // adblock-rust calls a scriptlet by its function's name, so a scriptlet
+  // must be a named function declaration. Helpers are only pasted in ahead
+  // of the calls, so a class (ArglistParser, JSONPath, …) is fine there.
+  if (!helper && !/^function\s+[^\s(){}]+\s*\(/.test(code)) {
     console.warn(`skipped ${entry.name}: not a named function declaration`);
     continue;
   }
@@ -44,7 +47,7 @@ for (const entry of scriptlets) {
   const resource = {
     name: entry.name,
     aliases,
-    kind: { mime: entry.name.endsWith('.fn') ? 'fn/javascript' : 'application/javascript' },
+    kind: { mime: helper ? 'fn/javascript' : 'application/javascript' },
     content: Buffer.from(code, 'utf8').toString('base64'),
   };
   if (Array.isArray(entry.dependencies) && entry.dependencies.length) {
