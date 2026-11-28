@@ -30,7 +30,7 @@ enum NetworkFilters {
     }
 
     /// Bump when the conversion changes, so compiled lists are made again.
-    static let version = 2
+    static let version = 3
 
     /// Rules of our own, on top of the lists, for the Ads switch.
     ///
@@ -43,6 +43,18 @@ enum NetworkFilters {
     static let builtInAds: [Rule] = [
         Rule(
             trigger: #"{"url-filter":"^https?://([a-z][a-z]*\\.)?[a-z0-9][a-z0-9][a-z0-9][a-z0-9][a-z0-9][a-z0-9]*\\.[a-z][a-z][a-z][a-z]*/[a-z][0-9A-Za-z][0-9A-Za-z][0-9A-Za-z][0-9A-Za-z][0-9A-Za-z][0-9A-Za-z][0-9A-Za-z][0-9A-Za-z][0-9A-Za-z][0-9A-Za-z]*/[0-9][0-9][0-9][0-9][0-9]?[0-9]?$","url-filter-is-case-sensitive":true,"resource-type":["script"],"load-type":["third-party"]}"#,
+            exception: false
+        ),
+        // A popunder loader that tries one domain after another, most of
+        // them on no list: its files always have the same names, a script
+        // disguised as a stylesheet and a fake copy of the Jcrop library
+        // (the real one is `jquery.Jcrop.min.js`, which doesn't match).
+        Rule(
+            trigger: #"{"url-filter":"/[a-z][a-z]509_simpl\\.min\\.css$","url-filter-is-case-sensitive":true,"resource-type":["script"],"load-type":["third-party"]}"#,
+            exception: false
+        ),
+        Rule(
+            trigger: #"{"url-filter":"/[a-z]Jcrop\\.min\\.js$","url-filter-is-case-sensitive":true,"resource-type":["script"],"load-type":["third-party"]}"#,
             exception: false
         ),
     ]
