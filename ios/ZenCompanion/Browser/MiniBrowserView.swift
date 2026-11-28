@@ -72,6 +72,8 @@ struct MiniBrowserView: View {
     @State private var transitionEpoch = 0
     /// The deck's cards above the page's own; see `OpenPagesOverview`.
     @State private var aheadReveal: CGFloat = 1
+    /// How far the overview's grid is scrolled.
+    @State private var gridScroll: CGFloat = 0
     /// A new page from the deck: its address field waits until it has flown in.
     @State private var holdsNewPageSearch = false
     /// A new deck each time the page leaves for it, with the order fresh.
@@ -339,7 +341,7 @@ struct MiniBrowserView: View {
                         // On its way to its card the page already is the
                         // card: the site never shows in the move, nor does
                         // an article open in the reader over it.
-                        if model.isPrivate, pageFloats || privateCoverHolds {
+                        if Self.coversPrivatePagesInFlight, model.isPrivate, pageFloats || privateCoverHolds {
                             PrivatePageCover()
                                 // The page's own outline, corner for corner,
                                 // so nothing shows past it.
@@ -438,7 +440,7 @@ struct MiniBrowserView: View {
                 ZStack {
                     sheetBackground
                     // The status bar goes dark with the private page's cover.
-                    if model.isPrivate, pageFloats || privateCoverHolds {
+                    if Self.coversPrivatePagesInFlight, model.isPrivate, pageFloats || privateCoverHolds {
                         Palette.background(.dark).opacity(privateCoverFade)
                     }
                 }
@@ -567,12 +569,50 @@ struct MiniBrowserView: View {
             expansion: cardExpansion,
             excludedCardID: overviewHoldsCards ? pages.activeID : nil,
             reveal: overviewReveal,
-            aheadReveal: aheadReveal,
             topInset: pageFrame.minY,
-            bottomClearance: MiniBrowserChromeMetrics.overviewDockHeight + MiniBrowserChromeMetrics.overviewDockLift
-                + MiniBrowserChromeMetrics.overviewSectionHeight + MiniBrowserChromeMetrics.overviewSectionSpacing
-                + chromeBottomPadding + 10,
+            bottomClearance: overviewBottomClearance,
+            scroll: $gridScroll,
             onOpen: closeOverview(to:)
+        )
+    }
+
+    /// Private pages used to fly to a dark card that hid the site. With their
+    /// own section (behind its lock), their cards show the page like any
+    /// other, so the page flies as itself.
+    private static let coversPrivatePagesInFlight = false
+
+    /// The overview's buttons and section switch, which the grid scrolls clear of.
+    private var overviewBottomClearance: CGFloat {
+        MiniBrowserChromeMetrics.overviewDockHeight + MiniBrowserChromeMetrics.overviewDockLift
+            + MiniBrowserChromeMetrics.overviewSectionHeight + MiniBrowserChromeMetrics.overviewSectionSpacing
+            + chromeBottomPadding + 10
+    }
+
+    /// The grid as the overview lays it out, for the page's flights.
+    private func gridGeometry(count: Int? = nil) -> PageGridGeometry {
+        PageGridGeometry(
+            screen: screenSize,
+            count: count ?? pages.pages.count,
+            topInset: pageFrame.minY,
+            bottomClearance: overviewBottomClearance
+        )
+    }
+
+    /// Scrolls the grid so the page on screen (or the newest) is in view,
+    /// before the page flies to its card.
+    private func scrollGridToActivePage() {
+        guard screenSize.width > 0 else { return }
+        gridScroll = gridGeometry().scroll(showing: activeDeckIndex)
+    }
+
+    /// A card's pose for the page: where the page has to be to lie on it.
+    private func pose(for card: CGRect) -> PageCardPose {
+        let scale = card.width / screenSize.width
+        return PageCardPose(
+            x: card.midX - screenSize.width / 2,
+            y: card.maxY - screenSize.height,
+            scale: scale,
+            corner: PageGridGeometry.cornerRadius / scale
         )
     }
 
@@ -783,8 +823,9 @@ private extension MiniBrowserView {
         editingAddress = false
         startsInSearch = false
         pages.showSection(private: toPrivate)
-        // A fresh deck, with the other section's cards.
+        // A fresh grid, with the other section's cards, showing its newest.
         deckGeneration += 1
+        scrollGridToActivePage()
         if !showOverview {
             showOverview = true
             overviewControls = true
@@ -850,16 +891,7 @@ private extension MiniBrowserView {
     /// Where the page has to be to lie exactly on its card.
     private func cardPose() -> PageCardPose? {
         guard screenSize.width > 0, screenSize.height > 0 else { return nil }
-        let deck = PageDeckGeometry(screen: screenSize, count: CGFloat(pages.pages.count), topInset: pageFrame.minY)
-        let place = CGFloat(activeDeckIndex)
-        let card = deck.frame(index: place, focus: place)
-        let scale = card.width / screenSize.width
-        return PageCardPose(
-            x: card.midX - screenSize.width / 2,
-            y: card.maxY - screenSize.height,
-            scale: scale,
-            corner: PageDeckGeometry.cornerRadius / scale
-        )
+        return pose(for: gridGeometry().frame(index: activeDeckIndex, scroll: gridScroll))
     }
 
     /// The finger took hold of the page: the deck goes in behind it right
@@ -873,7 +905,11 @@ private extension MiniBrowserView {
         pullPassedPoint = false
         // A card may still be growing into this page, and that deck has its
         // focus and order from before. A page coming back keeps its deck.
-        if !pageFloats { deckGeneration += 1 }
+        if !pageFloats {
+            deckGeneration += 1
+            // The grid shows this page's card, so the page has a card to land on.
+            scrollGridToActivePage()
+        }
         expandingCardID = nil
         cardExpansion = 0
         overviewHoldsCards = false
@@ -1027,6 +1063,7 @@ private extension MiniBrowserView {
         transitionEpoch += 1
         overviewHoldsCards = false
         holdsNewPageSearch = false
+        if !showOverview { scrollGridToActivePage() }
         showOverview = true
         overviewControls = true
         // With no flight, a private page is covered as the deck fades in
@@ -1096,7 +1133,7 @@ private extension MiniBrowserView {
                 privateCoverFade = 1
             }
         }
-        withAnimation(PageDeckGeometry.openMotion) {
+        withAnimation(PageGridGeometry.openMotion) {
             expandingCardID = page.id
             cardExpansion = 1
             overviewReveal = 0
@@ -1166,16 +1203,9 @@ private extension MiniBrowserView {
     private func newPageStartPose() -> PageCardPose? {
         guard screenSize.width > 0, screenSize.height > 0 else { return nil }
         let count = pages.pages.count
-        let deck = PageDeckGeometry(screen: screenSize, count: CGFloat(count), topInset: pageFrame.minY)
-        let last = CGFloat(max(0, count - 1))
-        let card = deck.frame(index: last, focus: last - 1)
-        let scale = card.width / screenSize.width
-        return PageCardPose(
-            x: card.midX - screenSize.width / 2,
-            y: card.maxY - screenSize.height,
-            scale: scale,
-            corner: PageDeckGeometry.cornerRadius / scale
-        )
+        let grid = gridGeometry(count: count)
+        // Where its card goes in the grid: after the last one.
+        return pose(for: grid.frame(index: max(0, count - 1), scroll: gridScroll))
     }
 
     /// A blank sheet comes in from the right and grows to the whole screen.
