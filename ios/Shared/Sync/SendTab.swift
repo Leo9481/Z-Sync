@@ -149,9 +149,14 @@ actor SendTabService {
         let response: Any
         do {
             response = try await client.deviceAPI(path: "account/device", method: "POST", sessionTokenHex: account.sessionTokenHex, json: body)
-        } catch where state.deviceID != nil {
-            // The record may be gone (removed on another device): start a new one.
-            body["id"] = nil
+        } catch {
+            // The session may already have a record this one doesn't know of
+            // (the app and the share extension registered at the same time),
+            // or the one it knew may be gone. Update the session's own record
+            // if the account has one; otherwise start a new record.
+            let current = try? await currentDeviceID(sessionTokenHex: account.sessionTokenHex)
+            guard current != nil || state.deviceID != nil else { throw error }
+            body["id"] = current
             response = try await client.deviceAPI(path: "account/device", method: "POST", sessionTokenHex: account.sessionTokenHex, json: body)
         }
         guard let id = (response as? [String: Any])?["id"] as? String else {
@@ -161,6 +166,13 @@ actor SendTabService {
         state.sessionHash = session
         state.registeredAt = Date()
         save(state)
+    }
+
+    /// The record the account keeps for this session, if any.
+    private func currentDeviceID(sessionTokenHex: String) async throws -> String? {
+        let response = try await client.deviceAPI(path: "account/devices", method: "GET", sessionTokenHex: sessionTokenHex)
+        let list = response as? [[String: Any]] ?? []
+        return list.first { ($0["isCurrentDevice"] as? Bool) == true }?["id"] as? String
     }
 
     /// This device's public keys, encrypted with the account's Sync key the
