@@ -318,6 +318,21 @@ struct SettingsSheet: View {
                     }
                 }
                 .buttonStyle(PressedButtonStyle())
+
+                SettingsHairline(scheme: scheme)
+
+                NavigationLink {
+                    RaindropSettingsPage(scheme: scheme)
+                } label: {
+                    SettingsRow(
+                        title: "Raindrop",
+                        systemImage: "cloud",
+                        scheme: scheme
+                    ) {
+                        SettingsChevron(scheme: scheme)
+                    }
+                }
+                .buttonStyle(PressedButtonStyle())
             }
             .liftCard(scheme)
         }
@@ -675,6 +690,120 @@ private struct PrivacySettingsPage: View {
         } message: {
             Text("settings.clear_website_data.message")
         }
+    }
+}
+
+/// Raindrop.io: the person's own test token, the account it belongs to and
+/// the collection ☁ saves into.
+private struct RaindropSettingsPage: View {
+    let scheme: ColorScheme
+
+    @Bindable private var raindrop = RaindropSettings.shared
+    @State private var token = ""
+    @State private var checking = false
+    @State private var error: String?
+
+    var body: some View {
+        SettingsSubpage(title: "Raindrop", scheme: scheme) {
+            if raindrop.isConnected {
+                VStack(spacing: 0) {
+                    SettingsRow(
+                        title: "Connected",
+                        systemImage: "checkmark.circle",
+                        scheme: scheme,
+                        subtitle: LocalizedStringKey(raindrop.accountName ?? "Raindrop")
+                    ) { EmptyView() }
+
+                    SettingsHairline(scheme: scheme)
+
+                    SettingsRow(title: "Save to", systemImage: "tray.and.arrow.down", scheme: scheme) {
+                        Menu {
+                            Button("Unsorted") { raindrop.defaultCollectionID = RaindropCollection.unsorted }
+                            RaindropCollectionMenu(collections: raindrop.collections) { raindrop.defaultCollectionID = $0 }
+                        } label: {
+                            SettingsMenuValue(text: raindrop.defaultCollectionName, scheme: scheme)
+                        }
+                    }
+
+                    SettingsHairline(scheme: scheme)
+
+                    Button(role: .destructive) {
+                        raindrop.disconnect()
+                    } label: {
+                        SettingsRow(title: "Remove token", systemImage: "xmark.circle", scheme: scheme, color: .red) {
+                            EmptyView()
+                        }
+                    }
+                    .buttonStyle(PressedButtonStyle())
+                }
+                .liftCard(scheme)
+                .task { await raindrop.refreshCollections() }
+            } else {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text(verbatim: "Paste a test token from your own Raindrop app. It stays on this phone, in the Keychain.")
+                        .zenFont(15, design: .rounded)
+                        .foregroundStyle(Palette.ink(scheme).opacity(0.75))
+                    SecureField(text: $token) {
+                        Text(verbatim: "Test token")
+                    }
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .padding(14)
+                    .background(Palette.ink(scheme).opacity(0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    if let error {
+                        Text(verbatim: error)
+                            .zenFont(14, design: .rounded)
+                            .foregroundStyle(.red)
+                    }
+                    Button {
+                        Task { await connect() }
+                    } label: {
+                        Group {
+                            if checking {
+                                ProgressView().tint(Palette.paper(scheme))
+                            } else {
+                                Text(verbatim: "Connect")
+                                    .zenFont(17, weight: .semibold, design: .rounded)
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .foregroundStyle(Palette.paper(scheme))
+                        .background(Palette.ink(scheme).opacity(token.isEmpty ? 0.3 : 1), in: Capsule())
+                    }
+                    .buttonStyle(PressedButtonStyle())
+                    .disabled(token.isEmpty || checking)
+                }
+                .padding(16)
+                .liftCard(scheme)
+
+                SettingsSection(title: "How to get a test token", scheme: scheme) {
+                    Text(verbatim: """
+                        1. On raindrop.io, open Settings → Integrations.
+                        2. Under For Developers, create a new app (any name).
+                        3. Open the app and tap Create test token.
+                        4. Copy the token and paste it above.
+                        """)
+                        .zenFont(15, design: .rounded)
+                        .foregroundStyle(Palette.ink(scheme).opacity(0.75))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(16)
+                        .liftCard(scheme)
+                }
+            }
+        }
+    }
+
+    private func connect() async {
+        checking = true
+        error = nil
+        do {
+            try await raindrop.connect(token: token)
+            token = ""
+        } catch {
+            self.error = error.localizedDescription
+        }
+        checking = false
     }
 }
 

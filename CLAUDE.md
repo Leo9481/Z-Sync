@@ -73,7 +73,8 @@ Known ceiling: WebKit does not let apps cancel arbitrary network requests, so th
 ### 6. Raindrop.io bookmarks
 - Raindrop.io is the bookmarks manager, integrated directly. It uses a REST API with OAuth **(verify current docs, endpoints and rate limits)**.
 - Collections map to folders. Provide a bookmarks view, the quick-save button, and add/remove support.
-- Leo will create the Raindrop developer app and provide the keys. Never commit secrets. Use CI secrets and local config.
+- ~~Leo will create the Raindrop developer app and provide the keys.~~ Decided 2026-11-28: the .ipa is public, so no secret goes in it. Each person pastes the **test token** of their own Raindrop app in Settings → Raindrop (Keychain). Test tokens don't expire. No OAuth flow, no CI secrets.
+- **Built (PR feat/raindrop):** `Browser/Raindrop/` — `RaindropClient.swift` (`RaindropAPI`, `RaindropToken`, `RaindropSettings`), `RaindropPage.swift` (☁ save/remove/check on the page model), `RaindropBookmarksSheet.swift` (overview ☁). ☁ in the pill: tap saves to the default collection or removes a saved page; long press picks a collection. Saved state from `POST import/url/exists`.
 
 ### 7. Page translator and dark mode (must-haves, added 2026-11-27)
 Both live in the page menu (the ☰ button in the address pill).

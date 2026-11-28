@@ -104,6 +104,8 @@ struct MiniBrowserView: View {
     /// by the few views that move with it: the browser itself is not built
     /// again on every frame of the finger. See `PageSwipeOffset`.
     @State private var swipe = PageSwipeOffset()
+    /// Raindrop bookmarks, from the overview's ☁.
+    @State private var showBookmarks = false
     private var pageSwipe: CGFloat {
         get { swipe.x }
         nonmutating set { swipe.x = newValue }
@@ -243,7 +245,7 @@ struct MiniBrowserView: View {
                 onPickVisit: pickVisit,
                 onOpenPages: openOverview,
                 overviewShown: overviewControls,
-                onNewPage: openNewPage,
+                onNewPage: { openNewPage() },
                 onOpenHistory: openHistory,
                 onCloseAll: { confirmCloseAll = true },
                 onDone: {
@@ -256,6 +258,7 @@ struct MiniBrowserView: View {
                     }
                 },
                 onOpenSettings: onOpenSettings,
+                onOpenBookmarks: { showBookmarks = true },
                 onSwitchSection: switchSection(toPrivate:),
                 navBar: {
                     MiniBrowserTopBar(
@@ -476,6 +479,15 @@ struct MiniBrowserView: View {
                 }
             } message: {
                 Text("kept.close_all_message")
+            }
+            .sheet(isPresented: $showBookmarks) {
+                // The sheet goes first, then the bookmark flies in as a new page.
+                RaindropBookmarksSheet { url in
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(350))
+                        openNewPage(url: url)
+                    }
+                }
             }
             .modifier(PageSwipeWatch(swipe: swipe) { offset in
                 if offset < 0, pages.neighbours.next == nil, !revealingNewPage { revealingNewPage = true }
@@ -1215,7 +1227,8 @@ private extension MiniBrowserView {
     /// A blank sheet comes in from the right and grows to the whole screen.
     /// The deck stays exactly where it is: only the new page moves, and the
     /// cards are covered instead of sliding or fading away under it.
-    private func openNewPage() {
+    /// A new page for `url` (a bookmark), or a blank one for a search.
+    private func openNewPage(url: URL? = nil) {
         transitionEpoch += 1
         let epoch = transitionEpoch
         // A cover held for the page the deck faded in over is not the new page's.
@@ -1224,7 +1237,7 @@ private extension MiniBrowserView {
         // The deck stays as it was while it goes: no card joins it on the way out.
         overviewHoldsCards = true
         holdsNewPageSearch = !reduceMotion
-        pages.open(url: nil)
+        pages.open(url: url)
         guard !reduceMotion, let start = newPageStartPose() else {
             // No flight follows: the page change starts the search as usual.
             holdsNewPageSearch = false
@@ -1264,7 +1277,7 @@ private extension MiniBrowserView {
                 // Only now: bringing up the keyboard holds the main thread,
                 // and the flight would stop dead in the middle.
                 holdsNewPageSearch = false
-                startNewPageSearch()
+                if url == nil { startNewPageSearch() }
                 withAnimation(.easeOut(duration: 0.22)) { chromeFade = 1 }
             }
             withAnimation(.easeOut(duration: 0.1)) { chromeFade = 0 }

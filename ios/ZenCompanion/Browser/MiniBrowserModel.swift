@@ -779,6 +779,11 @@ final class MiniBrowserModel {
         webView?.load(URLRequest(url: url))
     }
 
+    /// The page's bookmark in Raindrop, if it is saved there.
+    var raindropID: Int?
+    var raindropSaving = false
+    @ObservationIgnored var raindropCheckedURL: URL?
+
     /// When the app itself last sent the page somewhere (the address bar, a
     /// synced tab, an allowed redirect): never a redirect to block.
     @ObservationIgnored var appLoadAt: CFTimeInterval = 0
@@ -1255,6 +1260,8 @@ final class MiniBrowserModel {
 
     /// A new page replaced whatever failed.
     func pageDidCommit() {
+        raindropID = nil
+        raindropCheckedURL = nil
         pageError = nil
         failedURL = nil
         countedResources.removeAll()
