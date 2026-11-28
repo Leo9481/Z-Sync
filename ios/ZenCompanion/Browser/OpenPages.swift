@@ -660,7 +660,10 @@ final class OpenPagesStore: MiniBrowserPageHost {
         guard let webView = page.model.webView, webView.window != nil,
               webView.bounds.width > 0, webView.bounds.height > 0 else { return nil }
         guard let image = try? await webView.takeSnapshot(configuration: WKSnapshotConfiguration()) else { return nil }
-        let small = Self.shrunk(image)
+        // Shrunk away from the main thread: the snapshot is taken as the page
+        // starts flying to its card, and drawing it small there would cost
+        // that flight frames.
+        let small = await Task.detached(priority: .userInitiated) { Self.shrunk(image) }.value
         page.shot = small
         page.shotStored = false
         // The page may have been closed while the snapshot was on its way.
@@ -668,10 +671,13 @@ final class OpenPagesStore: MiniBrowserPageHost {
         return image
     }
 
-    private static func shrunk(_ image: UIImage) -> UIImage {
-        guard image.size.width > shotWidth else { return image }
+    private nonisolated static func shrunk(_ image: UIImage) -> UIImage {
+        guard image.size.width > shotWidth else { return image.preparingForDisplay() ?? image }
         let size = CGSize(width: shotWidth, height: image.size.height * shotWidth / image.size.width)
-        return UIGraphicsImageRenderer(size: size).image { _ in
+        // The scale is set here: the default asks the screen, a main-thread call.
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = image.scale
+        return UIGraphicsImageRenderer(size: size, format: format).image { _ in
             image.draw(in: CGRect(origin: .zero, size: size))
         }
     }
@@ -680,10 +686,16 @@ final class OpenPagesStore: MiniBrowserPageHost {
         guard page.shot == nil else { return }
         let file = fileURL(page.id, "jpg")
         let generation = page.shotGeneration
-        let data = await Task.detached(priority: .utility) { try? Data(contentsOf: file) }.value
+        // Read and unpacked here: a JPEG is otherwise unpacked on the main
+        // thread the first time it is drawn, a hitch for each row of cards
+        // that scrolls into view.
+        let image = await Task.detached(priority: .userInitiated) { () -> UIImage? in
+            guard let data = try? Data(contentsOf: file), let image = UIImage(data: data) else { return nil }
+            return image.preparingForDisplay() ?? image
+        }.value
         // Let go again while it loaded: the card is no longer near the focus.
         guard page.shotGeneration == generation else { return }
-        if page.shot == nil, let data, let image = UIImage(data: data) {
+        if page.shot == nil, let image {
             page.shot = image
             // What the disk holds, so letting go of it costs nothing.
             page.shotStored = true
@@ -716,7 +728,7 @@ final class OpenPagesStore: MiniBrowserPageHost {
         page.shotStored = false
     }
 
-    private static let shotWidth = 240.0
+    private nonisolated static let shotWidth = 240.0
 
     /// A private page's picture stays in memory only.
     private func writeShot(_ image: UIImage, of page: OpenPage) {

@@ -45,7 +45,7 @@ enum DisplayCorners {
 ///
 /// A card is the page alone, without the status bar's strip above it, in the
 /// page's own proportions, with its title under it.
-struct PageGridGeometry {
+struct PageGridGeometry: Equatable {
     let screen: CGSize
     let count: Int
     /// The status bar's height: the page starts below it, and so does a card
@@ -122,11 +122,31 @@ struct PageGridGeometry {
         return scroll
     }
 
+    /// The rows on screen, and a row either side, with the grid scrolled by
+    /// `scroll`. It changes only as a row comes near or goes.
+    func nearRows(scroll: CGFloat) -> ClosedRange<Int> {
+        let low = Int(((scroll - rowHeight - contentTop) / rowHeight).rounded(.down))
+        let high = Int(((scroll + screen.height + rowHeight - contentTop) / rowHeight).rounded(.down))
+        let first = max(0, low)
+        return first...max(first, high)
+    }
+
     /// Whether a card is on screen, or a row away from it.
     func isNear(index: Int, scroll: CGFloat) -> Bool {
         let card = frame(index: index, scroll: scroll)
         return card.maxY > -rowHeight && card.minY < screen.height + rowHeight
     }
+}
+
+/// How far the grid is scrolled, shared by the overview and the browser.
+///
+/// An object rather than a value the browser holds: the grid scrolls up to
+/// 120 times a second, and only the views that read the offset are redrawn,
+/// which is the overview. The browser reads it only for the page's flights.
+@MainActor
+@Observable
+final class GridScrollPosition {
+    var offset: CGFloat = 0
 }
 
 /// Moves the grid frame by frame once the finger lets go: it coasts and slows
@@ -291,13 +311,18 @@ struct OpenPagesOverview: View {
     var topInset: CGFloat
     /// Height of the browser's buttons, which stay over the overview.
     var bottomClearance: CGFloat
-    /// How far the grid is scrolled. Kept by the browser, so the page lands on
-    /// the card where the grid really shows it.
-    @Binding var scroll: CGFloat
+    /// How far the grid is scrolled. Shared with the browser, so the page
+    /// lands on the card where the grid really shows it; see `GridScrollPosition`.
+    let position: GridScrollPosition
     var onOpen: (OpenPage) -> Void
 
     @Environment(\.colorScheme) private var scheme
     @State private var pinError: String?
+
+    private var scroll: CGFloat {
+        get { position.offset }
+        nonmutating set { position.offset = newValue }
+    }
     @State private var dragStartScroll: CGFloat?
     @State private var dragAxis: DragAxis?
     /// The card being swiped sideways to close it, and how far.
@@ -375,69 +400,53 @@ struct OpenPagesOverview: View {
 
     // MARK: - Grid
 
+    /// The cards are laid out once, unscrolled, and the whole grid slides by
+    /// the scroll. While it scrolls only that slide changes from frame to
+    /// frame: the cards themselves (with their menus, drag and drop) are
+    /// built again only when a row comes near the screen or leaves it.
     private func cards(_ grid: PageGridGeometry) -> some View {
-        ZStack {
-            let cards = visiblePages
-            ForEach(Array(cards.enumerated()), id: \.element.id) { index, page in
-                let isExpanding = page.id == expandingCardID
-                // Only what is on screen, or a row away, is drawn at all: with
-                // dozens of tabs the grid still draws a handful of cards.
-                if isExpanding || grid.isNear(index: index, scroll: scroll) {
-                    let grown = isExpanding ? expansion : 0
-                    let resting = grid.frame(index: index, scroll: scroll)
-                    let target = grid.pageFrame
-                    let frame = CGRect(
-                        x: resting.minX + (target.minX - resting.minX) * grown,
-                        y: resting.minY + (target.minY - resting.minY) * grown,
-                        width: resting.width + (target.width - resting.width) * grown,
-                        height: resting.height + (target.height - resting.height) * grown
-                    )
-                    let isCurrent = page.id == pages.activeID
-                    // The others come in around the page as it shrinks.
-                    let settling = isCurrent || isExpanding ? 1 : 0.92 + 0.08 * reveal
-                    OpenPageCard(
-                        page: page,
-                        store: pages,
-                        isCurrent: isCurrent && expandingCardID == nil,
-                        hidesPicture: page.id == hiddenCardID,
-                        size: grid.cardSize,
-                        isNear: grid.isNear(index: index, scroll: scroll),
-                        isExpanding: isExpanding,
-                        expansion: grown,
-                        isLifted: page.id == draggingID,
-                        onOpen: {
-                            driver.stop()
-                            draggingID = nil
-                            onOpen(page)
-                        },
-                        onClose: { close(page) },
-                        onLift: {
-                            driver.stop()
-                            draggingID = page.id
-                            return NSItemProvider(object: page.id as NSString)
-                        },
-                        drop: CardDrop(
-                            targetID: page.id,
-                            top: resting.minY,
-                            draggingID: $draggingID,
-                            pages: pages,
-                            onHover: { dragHover(atY: $0, in: grid) },
-                            onEnd: { driver.stop() }
-                        )
-                    ) {
-                        menu(for: page)
-                    }
-                    .scaleEffect(frame.width / max(grid.cardSize.width, 1) * settling)
-                    .position(
-                        x: frame.midX + (page.id == swipedID ? swipe : 0),
-                        y: frame.midY
-                    )
-                    .opacity(isCurrent || isExpanding ? 1 : Double(reveal))
-                    .opacity(page.id == swipedID ? Double(1 - min(0.7, abs(swipe) / max(grid.cardSize.width * 1.6, 1))) : 1)
-                    .zIndex(isExpanding ? 1_000 : Double(index))
-                }
-            }
-        }
+        let position = position
+        return GridCards(
+            pages: pages,
+            cards: visiblePages,
+            grid: grid,
+            nearRows: grid.nearRows(scroll: scroll),
+            activeID: pages.activeID,
+            hiddenCardID: hiddenCardID,
+            expandingCardID: expandingCardID,
+            expansion: expansion,
+            // A card grows to the screen, which the slide has moved.
+            expansionScroll: expandingCardID == nil ? 0 : scroll,
+            reveal: reveal,
+            draggingID: draggingID,
+            swipedID: swipedID,
+            swipe: swipe,
+            onOpen: { page in
+                driver.stop()
+                draggingID = nil
+                onOpen(page)
+            },
+            onClose: { close($0) },
+            onLift: { page in
+                driver.stop()
+                draggingID = page.id
+                return NSItemProvider(object: page.id as NSString)
+            },
+            drop: { page, top in
+                CardDrop(
+                    targetID: page.id,
+                    top: top,
+                    draggingID: $draggingID,
+                    pages: pages,
+                    // From the unscrolled grid to the screen, as it is now.
+                    onHover: { dragHover(atY: $0 - position.offset, in: grid) },
+                    onEnd: { driver.stop() }
+                )
+            },
+            menu: { menu(for: $0) }
+        )
+        .equatable()
+        .offset(y: -scroll)
         .allowsHitTesting(reveal > 0.99)
     }
 
@@ -539,13 +548,13 @@ struct OpenPagesOverview: View {
             @escaping () -> ClosedRange<CGFloat>
         ) -> Void
     ) {
-        let binding = $scroll
+        let position = position
         let pages = pages
         let excluded = excludedCardID
         start(
             driver,
-            { binding.wrappedValue },
-            { binding.wrappedValue = $0 },
+            { position.offset },
+            { position.offset = $0 },
             {
                 let now = PageGridGeometry(
                     screen: grid.screen,
@@ -731,6 +740,101 @@ struct OpenPagesOverview: View {
     }
 }
 
+/// The grid's cards, unscrolled; see `OpenPagesOverview.cards`.
+///
+/// Equal to the last one, SwiftUI skips building it again. The actions are
+/// left out of that: they act on the same pages and state every time.
+private struct GridCards<Menu: View>: View, Equatable {
+    let pages: OpenPagesStore
+    let cards: [OpenPage]
+    let grid: PageGridGeometry
+    let nearRows: ClosedRange<Int>
+    let activeID: String?
+    let hiddenCardID: String?
+    let expandingCardID: String?
+    let expansion: CGFloat
+    let expansionScroll: CGFloat
+    let reveal: CGFloat
+    let draggingID: String?
+    let swipedID: String?
+    let swipe: CGFloat
+    let onOpen: (OpenPage) -> Void
+    let onClose: (OpenPage) -> Void
+    let onLift: (OpenPage) -> NSItemProvider
+    let drop: (OpenPage, CGFloat) -> CardDrop
+    let menu: (OpenPage) -> Menu
+
+    nonisolated static func == (a: Self, b: Self) -> Bool {
+        MainActor.assumeIsolated {
+            a.pages === b.pages
+                && a.cards.map(\.id) == b.cards.map(\.id)
+                && a.grid == b.grid
+                && a.nearRows == b.nearRows
+                && a.activeID == b.activeID
+                && a.hiddenCardID == b.hiddenCardID
+                && a.expandingCardID == b.expandingCardID
+                && a.expansion == b.expansion
+                && a.expansionScroll == b.expansionScroll
+                && a.reveal == b.reveal
+                && a.draggingID == b.draggingID
+                && a.swipedID == b.swipedID
+                && a.swipe == b.swipe
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            ForEach(Array(cards.enumerated()), id: \.element.id) { index, page in
+                let isExpanding = page.id == expandingCardID
+                let isNear = nearRows.contains(index / grid.columns)
+                // Only what is on screen, or a row away, is drawn at all: with
+                // dozens of tabs the grid still draws a handful of cards.
+                if isExpanding || isNear {
+                    card(page, index: index, isExpanding: isExpanding, isNear: isNear)
+                }
+            }
+        }
+    }
+
+    private func card(_ page: OpenPage, index: Int, isExpanding: Bool, isNear: Bool) -> some View {
+        let grown = isExpanding ? expansion : 0
+        let resting = grid.frame(index: index, scroll: 0)
+        let target = grid.pageFrame.offsetBy(dx: 0, dy: expansionScroll)
+        let frame = CGRect(
+            x: resting.minX + (target.minX - resting.minX) * grown,
+            y: resting.minY + (target.minY - resting.minY) * grown,
+            width: resting.width + (target.width - resting.width) * grown,
+            height: resting.height + (target.height - resting.height) * grown
+        )
+        let isCurrent = page.id == activeID
+        // The others come in around the page as it shrinks.
+        let settling = isCurrent || isExpanding ? 1 : 0.92 + 0.08 * reveal
+        let isSwiped = page.id == swipedID
+        return OpenPageCard(
+            page: page,
+            store: pages,
+            isCurrent: isCurrent && expandingCardID == nil,
+            hidesPicture: page.id == hiddenCardID,
+            size: grid.cardSize,
+            isNear: isNear,
+            isExpanding: isExpanding,
+            expansion: grown,
+            isLifted: page.id == draggingID,
+            onOpen: { onOpen(page) },
+            onClose: { onClose(page) },
+            onLift: { onLift(page) },
+            drop: drop(page, resting.minY)
+        ) {
+            menu(page)
+        }
+        .scaleEffect(frame.width / max(grid.cardSize.width, 1) * settling)
+        .position(x: frame.midX + (isSwiped ? swipe : 0), y: frame.midY)
+        .opacity(isCurrent || isExpanding ? 1 : Double(reveal))
+        .opacity(isSwiped ? Double(1 - min(0.7, abs(swipe) / max(grid.cardSize.width * 1.6, 1))) : 1)
+        .zIndex(isExpanding ? 1_000 : Double(index))
+    }
+}
+
 /// A lifted card over another one: it takes that card's place in the order,
 /// and the cards between slide over.
 private struct CardDrop: DropDelegate {
@@ -844,7 +948,9 @@ private struct OpenPageCard<Menu: View>: View {
             // One picture, so the page's color under it never shows through
             // while the card fades.
             .compositingGroup()
-            .shadow(color: .black.opacity(isExpanding ? 0 : 0.18), radius: 8, y: 3)
+            // None in dark mode, where it would not show on the background
+            // and only cost each card a blur.
+            .shadow(color: .black.opacity(isExpanding || scheme == .dark ? 0 : 0.18), radius: 8, y: 3)
             .opacity(hidesPicture ? 0 : 1)
             .contentShape(shape)
             .contentShape(.contextMenuPreview, shape)
